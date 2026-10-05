@@ -1,0 +1,16 @@
+{
+  "id": "./",
+  "name": "오프라인 TXT 책장",
+  "short_name": "TXT 책장",
+  "description": "TXT를 기기에 저장해 인터넷 없이 읽는 개인 책장",
+  "lang": "ko",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f4ef",
+  "theme_color": "#f7f4ef",
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
