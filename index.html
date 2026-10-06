@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f7f4ef" id="themeColor">
   <meta name="color-scheme" content="light dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TXT 책장">
   <meta name="description" content="TXT를 기기에 보관하고 인터넷 없이 읽는 개인 텍스트 뷰어">
   <meta name="app-version" content="2.3.2">
@@ -21,7 +21,7 @@
     body.reading .topbar, body.reading .bottombar { transition: transform .2s ease, visibility .2s; }
     body.reading:not(.show-topbar) .topbar { transform: translateY(calc(-100% - 10px)); visibility: hidden; pointer-events: none; }
     body.reading:not(.show-bottombar) .bottombar { transform: translateY(calc(100% + 10px)); visibility: hidden; pointer-events: none; }
-    body.reading .reader-shell { min-height: 100vh; min-height: 100dvh; padding-top: max(18px, env(safe-area-inset-top)); padding-bottom: max(28px, env(safe-area-inset-bottom)); touch-action: manipulation; }
+    body.reading .reader-shell { min-height: 100vh; min-height: 100dvh; padding-top: 0; padding-bottom: max(28px, env(safe-area-inset-bottom)); touch-action: manipulation; }
     .nav { grid-template-columns: minmax(0, 1fr) minmax(100px, 1.25fr) minmax(0, 1fr); }
     .nav > button { min-width: 0; padding: 8px 6px; font-size: 14px; }
     #chapterJumpBtn { min-height: 52px; }
