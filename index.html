@@ -137,16 +137,11 @@
     const topbar = document.querySelector('.topbar');
     const bottombar = document.querySelector('.bottombar');
     const prefix = 'offline-txt-v2:' + new URL('./', location.href).pathname + ':';
-    let tap = null;
-    let lastTap = null;
-    let lastScrollAt = -1000;
-    const DOUBLE_TAP_MS = 400;
-    const DOUBLE_TAP_DISTANCE = 34;
+    let lastFocus = null;
     let snapshot = null;
     let editorDB = null;
     let opening = false;
     let saving = false;
-    let lastFocus = null;
     const editor = document.createElement('dialog');
     editor.id = 'editDialog';
     editor.setAttribute('aria-labelledby', 'editTitle');
@@ -191,48 +186,18 @@
     new MutationObserver(syncReader).observe($('title'), { childList: true, characterData: true, subtree: true });
     syncReader();
 
-    // A short, stationary tap toggles both bars. Do not capture a pointer or
-    // cancel native scrolling, pinch zoom, selection or iPhone edge gestures.
-    readerShell.addEventListener('pointerdown', event => {
-      tap = null;
-      if (!event.isPrimary || event.button !== 0 || !reading() || modalOpen() || hasSelection()) return;
+    // Single tap is intentionally a no-op. Only the second click of a true
+    // double tap may toggle the reader chrome.
+    readerShell.addEventListener('click', event => {
+      if (!event.isTrusted || !reading() || modalOpen() || hasSelection()) return;
       if (event.target.closest('button, input, textarea, select, a, [contenteditable]')) return;
-      if (performance.now() - lastScrollAt < 180) { lastTap = null; return; }
-      tap = { id: event.pointerId, x: event.clientX, y: event.clientY, scroll: scrollY, time: performance.now() };
-    }, { passive: true });
-    readerShell.addEventListener('pointermove', event => {
-      if (!tap || event.pointerId !== tap.id) return;
-      if (Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 10) tap = null;
-    }, { passive: true });
-    readerShell.addEventListener('pointercancel', () => { tap = null; lastTap = null; }, { passive: true });
-    readerShell.addEventListener('contextmenu', () => { tap = null; lastTap = null; });
-    readerShell.addEventListener('pointerup', event => {
-      const started = tap;
-      tap = null;
-      if (!started || event.pointerId !== started.id || !event.isPrimary) { lastTap = null; return; }
-      const now = performance.now();
-      if (now - started.time > 420 || Math.abs(scrollY - started.scroll) > 3) { lastTap = null; return; }
-      if (Math.hypot(event.clientX - started.x, event.clientY - started.y) > 10) { lastTap = null; return; }
+      if (event.detail !== 2) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleBars();
+    }, { capture: true });
 
-      const currentTap = { x: event.clientX, y: event.clientY, time: now };
-      if (lastTap &&
-          now - lastTap.time <= DOUBLE_TAP_MS &&
-          Math.hypot(currentTap.x - lastTap.x, currentTap.y - lastTap.y) <= DOUBLE_TAP_DISTANCE) {
-        lastTap = null;
-        toggleBars();
-        return;
-      }
-      lastTap = currentTap;
-    }, { passive: true });
-    window.addEventListener('scroll', () => {
-      lastScrollAt = performance.now();
-      lastTap = null;
-      if (tap && Math.abs(scrollY - tap.scroll) > 3) tap = null;
-    }, { passive: true });
     for (const bar of [topbar, bottombar]) {
-      bar.addEventListener('pointerdown', () => { lastTap = null; });
-      bar.addEventListener('click', () => { lastTap = null; });
-      bar.addEventListener('focusin', () => { lastTap = null; });
     }
     document.addEventListener('keydown', event => {
       if (modalOpen() || event.target.closest('input, textarea, select') || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -246,14 +211,9 @@
       // second copy of the library or an inferred global chapter number.
       $('chaptersBtn').click();
       if (!$('libraryDialog').open) return;
-      lastTap = null;
       $('chapterSearch').focus({ preventScroll: true });
       $('chapterList').scrollTop = 0;
     });
-    document.querySelectorAll('dialog').forEach(dialog => {
-      dialog.addEventListener('close', () => { lastTap = null; });
-    });
-
     function connect() {
       return new Promise((resolve, reject) => {
         const request = indexedDB.open(prefix + 'bookshelf');
@@ -325,7 +285,6 @@
       $('editError').textContent = '본문을 여는 중…';
       fitEditor();
       editor.showModal();
-      lastTap = null;
       let database;
       try {
         database = await connect();
@@ -368,7 +327,6 @@
       editorDB = null;
       snapshot = null;
       if (lastFocus?.isConnected) lastFocus.focus({ preventScroll: true });
-      lastTap = null;
     });
     $('editBtn').addEventListener('click', () => { void openEditor(); });
     $('editClose').addEventListener('click', closeEditor);
