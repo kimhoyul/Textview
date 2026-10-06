@@ -137,6 +137,13 @@
     const topbar = document.querySelector('.topbar');
     const bottombar = document.querySelector('.bottombar');
     const prefix = 'offline-txt-v2:' + new URL('./', location.href).pathname + ':';
+    let firstTap = null;
+    let firstTapTimer = 0;
+    let touchCandidate = null;
+    const DOUBLE_TAP_MS = 380;
+    const DOUBLE_TAP_DISTANCE = 42;
+    const TAP_MOVE_LIMIT = 12;
+    const TAP_MAX_MS = 320;
     let lastFocus = null;
     let snapshot = null;
     let editorDB = null;
@@ -186,18 +193,113 @@
     new MutationObserver(syncReader).observe($('title'), { childList: true, characterData: true, subtree: true });
     syncReader();
 
-    // Single tap is intentionally a no-op. Only the second click of a true
-    // double tap may toggle the reader chrome.
-    readerShell.addEventListener('click', event => {
-      if (!event.isTrusted || !reading() || modalOpen() || hasSelection()) return;
+    function clearFirstTap() {
+      firstTap = null;
+      if (firstTapTimer) {
+        clearTimeout(firstTapTimer);
+        firstTapTimer = 0;
+      }
+    }
+
+    // iPhone/PWA: the first tap never changes the UI. Only a second short tap
+    // near the first one, inside the double-tap window, toggles both bars.
+    readerShell.addEventListener('touchstart', event => {
+      touchCandidate = null;
+      if (!reading() || modalOpen() || hasSelection() || event.touches.length !== 1) {
+        clearFirstTap();
+        return;
+      }
+      if (event.target.closest('button, input, textarea, select, a, [contenteditable]')) {
+        clearFirstTap();
+        return;
+      }
+      const touch = event.touches[0];
+      touchCandidate = {
+        id: touch.identifier,
+        x: touch.clientX,
+        y: touch.clientY,
+        scrollY: window.scrollY,
+        startedAt: performance.now(),
+        moved: false
+      };
+    }, { passive: true });
+
+    readerShell.addEventListener('touchmove', event => {
+      if (!touchCandidate || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      if (touch.identifier !== touchCandidate.id) {
+        touchCandidate = null;
+        clearFirstTap();
+        return;
+      }
+      const distance = Math.hypot(
+        touch.clientX - touchCandidate.x,
+        touch.clientY - touchCandidate.y
+      );
+      if (distance > TAP_MOVE_LIMIT || Math.abs(window.scrollY - touchCandidate.scrollY) > 3) {
+        touchCandidate.moved = true;
+        clearFirstTap();
+      }
+    }, { passive: true });
+
+    readerShell.addEventListener('touchend', event => {
+      const candidate = touchCandidate;
+      touchCandidate = null;
+      if (!candidate || candidate.moved || event.changedTouches.length !== 1) return;
+      if (!reading() || modalOpen() || hasSelection()) {
+        clearFirstTap();
+        return;
+      }
+
+      const endedAt = performance.now();
+      if (endedAt - candidate.startedAt > TAP_MAX_MS ||
+          Math.abs(window.scrollY - candidate.scrollY) > 3) {
+        clearFirstTap();
+        return;
+      }
+
+      const touch = event.changedTouches[0];
+      const currentTap = {
+        x: touch.clientX,
+        y: touch.clientY,
+        time: endedAt
+      };
+
+      if (firstTap &&
+          endedAt - firstTap.time <= DOUBLE_TAP_MS &&
+          Math.hypot(currentTap.x - firstTap.x, currentTap.y - firstTap.y) <= DOUBLE_TAP_DISTANCE) {
+        clearFirstTap();
+        if (event.cancelable) event.preventDefault();
+        toggleBars();
+        return;
+      }
+
+      clearFirstTap();
+      firstTap = currentTap;
+      firstTapTimer = window.setTimeout(clearFirstTap, DOUBLE_TAP_MS + 30);
+    }, { passive: false });
+
+    readerShell.addEventListener('touchcancel', () => {
+      touchCandidate = null;
+      clearFirstTap();
+    }, { passive: true });
+
+    window.addEventListener('scroll', () => {
+      touchCandidate = null;
+      clearFirstTap();
+    }, { passive: true });
+
+    // Desktop fallback. This does not participate in iPhone touch detection.
+    readerShell.addEventListener('dblclick', event => {
+      if (!reading() || modalOpen() || hasSelection()) return;
       if (event.target.closest('button, input, textarea, select, a, [contenteditable]')) return;
-      if (event.detail !== 2) return;
       event.preventDefault();
-      event.stopPropagation();
       toggleBars();
-    }, { capture: true });
+    });
 
     for (const bar of [topbar, bottombar]) {
+      bar.addEventListener('touchstart', clearFirstTap, { passive: true });
+      bar.addEventListener('pointerdown', clearFirstTap, { passive: true });
     }
     document.addEventListener('keydown', event => {
       if (modalOpen() || event.target.closest('input, textarea, select') || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -209,6 +311,7 @@
       if (!reading() || modalOpen() || $('chaptersBtn').disabled) return;
       // Reuse the app's current-book selector and chapter navigation, not a
       // second copy of the library or an inferred global chapter number.
+      clearFirstTap();
       $('chaptersBtn').click();
       if (!$('libraryDialog').open) return;
       $('chapterSearch').focus({ preventScroll: true });
@@ -284,6 +387,7 @@
       $('editSave').disabled = true;
       $('editError').textContent = '본문을 여는 중…';
       fitEditor();
+      clearFirstTap();
       editor.showModal();
       let database;
       try {
