@@ -1,7 +1,7 @@
 /* Update VERSION whenever any app-shell file changes. TXT lives in IndexedDB,
    not this cache; an app update must never clear the bookshelf database. */
 'use strict';
-const VERSION = '2.2.0';
+const VERSION = '2.3.0';
 const SCOPE = self.registration.scope;
 const PREFIX = 'offline-txt-shell:' + encodeURIComponent(SCOPE) + ':';
 const CACHE = PREFIX + VERSION;
