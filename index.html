@@ -6,10 +6,10 @@
   <meta name="theme-color" content="#f7f4ef" id="themeColor">
   <meta name="color-scheme" content="light dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="TXT 책장">
   <meta name="description" content="TXT를 기기에 보관하고 인터넷 없이 읽는 개인 텍스트 뷰어">
-  <meta name="app-version" content="2.3.1">
+  <meta name="app-version" content="2.3.2">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <link rel="icon" type="image/png" href="./icons/icon-192.png">
@@ -21,7 +21,7 @@
     body.reading .topbar, body.reading .bottombar { transition: transform .2s ease, visibility .2s; }
     body.reading:not(.show-topbar) .topbar { transform: translateY(calc(-100% - 10px)); visibility: hidden; pointer-events: none; }
     body.reading:not(.show-bottombar) .bottombar { transform: translateY(calc(100% + 10px)); visibility: hidden; pointer-events: none; }
-    body.reading .reader-shell { min-height: 100vh; min-height: 100dvh; padding-top: 18px; padding-bottom: 28px; touch-action: manipulation; }
+    body.reading .reader-shell { min-height: 100vh; min-height: 100dvh; padding-top: max(18px, env(safe-area-inset-top)); padding-bottom: max(28px, env(safe-area-inset-bottom)); touch-action: manipulation; }
     .nav { grid-template-columns: minmax(0, 1fr) minmax(100px, 1.25fr) minmax(0, 1fr); }
     .nav > button { min-width: 0; padding: 8px 6px; font-size: 14px; }
     #chapterJumpBtn { min-height: 52px; }
@@ -29,7 +29,7 @@
     #currentChapterLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #chapterJumpBtn .progress-details { display: block; margin-top: 3px; font-size: 11px; white-space: nowrap; }
     #showControls { position: fixed; top: -160px; left: 12px; z-index: 80; }
-    #showControls:focus { top: 12px; }
+    #showControls:focus { top: max(12px, env(safe-area-inset-top)); }
     #editDialog { height: min(84dvh, 850px); max-height: min(84dvh, var(--editor-height, 850px)); }
     #editDialog .dialog-body { display: flex; flex: 1; flex-direction: column; min-height: 0; padding-top: 10px; }
     #editMeta { margin: 0 0 8px; overflow-wrap: anywhere; }
@@ -118,7 +118,7 @@
       <div class="button-row"><button id="exportBtn" type="button" disabled>백업 만들기</button><button id="restoreBtn" type="button" disabled>백업 불러오기</button></div>
       <p id="backupStatus" class="small" role="status"></p>
       <div id="backupReady" class="button-row" hidden><a id="backupLink" class="button primary" download>백업 파일 저장</a><button id="shareBackupBtn" type="button" hidden>공유</button></div>
-      <p class="small">버전 2.3.1</p>
+      <p class="small">버전 2.3.2</p>
       <button id="checkOfflineBtn" type="button" hidden></button>
       <p id="cacheDetails" hidden></p>
     </div>
