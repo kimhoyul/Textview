@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="TXT 책장">
   <meta name="description" content="TXT를 기기에 보관하고 인터넷 없이 읽는 개인 텍스트 뷰어">
-  <meta name="app-version" content="2.3.2">
+  <meta name="app-version" content="2.2.0">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <link rel="icon" type="image/png" href="./icons/icon-192.png">
@@ -21,7 +21,7 @@
     body.reading .topbar, body.reading .bottombar { transition: transform .2s ease, visibility .2s; }
     body.reading:not(.show-topbar) .topbar { transform: translateY(calc(-100% - 10px)); visibility: hidden; pointer-events: none; }
     body.reading:not(.show-bottombar) .bottombar { transform: translateY(calc(100% + 10px)); visibility: hidden; pointer-events: none; }
-    body.reading .reader-shell { min-height: 100vh; min-height: 100dvh; padding-top: max(18px, env(safe-area-inset-top)); padding-bottom: max(28px, env(safe-area-inset-bottom)); touch-action: manipulation; }
+    body.reading .reader-shell { min-height: 100vh; min-height: 100dvh; padding-top: max(18px, env(safe-area-inset-top)); padding-bottom: max(28px, env(safe-area-inset-bottom)); }
     .nav { grid-template-columns: minmax(0, 1fr) minmax(100px, 1.25fr) minmax(0, 1fr); }
     .nav > button { min-width: 0; padding: 8px 6px; font-size: 14px; }
     #chapterJumpBtn { min-height: 52px; }
@@ -118,7 +118,7 @@
       <div class="button-row"><button id="exportBtn" type="button" disabled>백업 만들기</button><button id="restoreBtn" type="button" disabled>백업 불러오기</button></div>
       <p id="backupStatus" class="small" role="status"></p>
       <div id="backupReady" class="button-row" hidden><a id="backupLink" class="button primary" download>백업 파일 저장</a><button id="shareBackupBtn" type="button" hidden>공유</button></div>
-      <p class="small">버전 2.3.2</p>
+      <p class="small">버전 2.2.0</p>
       <button id="checkOfflineBtn" type="button" hidden></button>
       <p id="cacheDetails" hidden></p>
     </div>
@@ -138,10 +138,8 @@
     const bottombar = document.querySelector('.bottombar');
     const prefix = 'offline-txt-v2:' + new URL('./', location.href).pathname + ':';
     let tap = null;
-    let lastTap = null;
     let lastScrollAt = -1000;
-    const DOUBLE_TAP_MS = 400;
-    const DOUBLE_TAP_DISTANCE = 34;
+    let hideTimer;
     let snapshot = null;
     let editorDB = null;
     let opening = false;
@@ -156,15 +154,21 @@
     function modalOpen() { return !!document.querySelector('dialog[open]'); }
     function hasSelection() { return window.getSelection()?.isCollapsed === false; }
     function hideBars() {
+      clearTimeout(hideTimer);
       if (!reading() || modalOpen()) return;
       if (topbar.contains(document.activeElement) || bottombar.contains(document.activeElement)) document.activeElement.blur();
       document.body.classList.remove('show-topbar', 'show-bottombar');
       $('showControls').setAttribute('aria-expanded', 'false');
     }
+    function scheduleHide() {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(hideBars, 4500);
+    }
     function showBars() {
       if (!reading() || modalOpen()) return;
       document.body.classList.add('show-topbar', 'show-bottombar');
       $('showControls').setAttribute('aria-expanded', 'true');
+      scheduleHide();
     }
     function toggleBars() {
       if (!reading() || modalOpen() || hasSelection()) return;
@@ -197,42 +201,34 @@
       tap = null;
       if (!event.isPrimary || event.button !== 0 || !reading() || modalOpen() || hasSelection()) return;
       if (event.target.closest('button, input, textarea, select, a, [contenteditable]')) return;
-      if (performance.now() - lastScrollAt < 180) { lastTap = null; return; }
+      if (performance.now() - lastScrollAt < 180) return;
       tap = { id: event.pointerId, x: event.clientX, y: event.clientY, scroll: scrollY, time: performance.now() };
     }, { passive: true });
     readerShell.addEventListener('pointermove', event => {
       if (!tap || event.pointerId !== tap.id) return;
       if (Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 10) tap = null;
     }, { passive: true });
-    readerShell.addEventListener('pointercancel', () => { tap = null; lastTap = null; }, { passive: true });
-    readerShell.addEventListener('contextmenu', () => { tap = null; lastTap = null; });
+    readerShell.addEventListener('pointercancel', () => { tap = null; }, { passive: true });
+    readerShell.addEventListener('contextmenu', () => { tap = null; });
     readerShell.addEventListener('pointerup', event => {
       const started = tap;
       tap = null;
-      if (!started || event.pointerId !== started.id || !event.isPrimary) { lastTap = null; return; }
-      const now = performance.now();
-      if (now - started.time > 420 || Math.abs(scrollY - started.scroll) > 3) { lastTap = null; return; }
-      if (Math.hypot(event.clientX - started.x, event.clientY - started.y) > 10) { lastTap = null; return; }
-
-      const currentTap = { x: event.clientX, y: event.clientY, time: now };
-      if (lastTap &&
-          now - lastTap.time <= DOUBLE_TAP_MS &&
-          Math.hypot(currentTap.x - lastTap.x, currentTap.y - lastTap.y) <= DOUBLE_TAP_DISTANCE) {
-        lastTap = null;
-        toggleBars();
-        return;
-      }
-      lastTap = currentTap;
+      if (!started || event.pointerId !== started.id || !event.isPrimary) return;
+      if (performance.now() - started.time > 420 || Math.abs(scrollY - started.scroll) > 3) return;
+      if (Math.hypot(event.clientX - started.x, event.clientY - started.y) > 10) return;
+      toggleBars();
     }, { passive: true });
     window.addEventListener('scroll', () => {
       lastScrollAt = performance.now();
-      lastTap = null;
       if (tap && Math.abs(scrollY - tap.scroll) > 3) tap = null;
     }, { passive: true });
     for (const bar of [topbar, bottombar]) {
-      bar.addEventListener('pointerdown', () => { lastTap = null; });
-      bar.addEventListener('click', () => { lastTap = null; });
-      bar.addEventListener('focusin', () => { lastTap = null; });
+      bar.addEventListener('pointerdown', () => clearTimeout(hideTimer));
+      bar.addEventListener('pointerup', scheduleHide);
+      bar.addEventListener('pointercancel', scheduleHide);
+      bar.addEventListener('click', scheduleHide);
+      bar.addEventListener('focusin', () => clearTimeout(hideTimer));
+      bar.addEventListener('focusout', scheduleHide);
     }
     document.addEventListener('keydown', event => {
       if (modalOpen() || event.target.closest('input, textarea, select') || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -246,12 +242,12 @@
       // second copy of the library or an inferred global chapter number.
       $('chaptersBtn').click();
       if (!$('libraryDialog').open) return;
-      lastTap = null;
+      clearTimeout(hideTimer);
       $('chapterSearch').focus({ preventScroll: true });
       $('chapterList').scrollTop = 0;
     });
     document.querySelectorAll('dialog').forEach(dialog => {
-      dialog.addEventListener('close', () => { lastTap = null; });
+      dialog.addEventListener('close', scheduleHide);
     });
 
     function connect() {
@@ -325,7 +321,7 @@
       $('editError').textContent = '본문을 여는 중…';
       fitEditor();
       editor.showModal();
-      lastTap = null;
+      clearTimeout(hideTimer);
       let database;
       try {
         database = await connect();
@@ -368,7 +364,7 @@
       editorDB = null;
       snapshot = null;
       if (lastFocus?.isConnected) lastFocus.focus({ preventScroll: true });
-      lastTap = null;
+      scheduleHide();
     });
     $('editBtn').addEventListener('click', () => { void openEditor(); });
     $('editClose').addEventListener('click', closeEditor);
