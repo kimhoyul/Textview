@@ -1,4 +1,8 @@
 
+    .library-backup { padding: 0 18px 12px; border-top: 1px solid var(--border); }
+    .library-backup summary { min-height: 44px; padding: 12px 0; cursor: pointer; font-size: 14px; }
+    .library-backup-content { padding-bottom: 8px; }
+
     :root {
       --bg: #f7f4ef;
       --panel: rgba(255,255,255,0.88);

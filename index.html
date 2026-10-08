@@ -3,17 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f7f4ef" id="themeColor">
+  <meta name="theme-color" content="#111214" id="themeColor">
   <meta name="color-scheme" content="light dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TXT 책장">
   <meta name="description" content="TXT를 기기에 보관하고 인터넷 없이 읽는 개인 텍스트 뷰어">
-  <meta name="app-version" content="2.3.2">
+  <meta name="app-version" content="2.4.0">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
   <link rel="icon" type="image/png" href="./icons/icon-192.png">
   <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./home.css">
+  <link rel="stylesheet" href="./bookshelf.css">
+  <link rel="stylesheet" href="./reader.css">
+  <link rel="stylesheet" href="./nas.css">
+  <script src="./home-ui.js" defer></script>
+  <script src="./bookshelf-ui.js" defer></script>
+  <script src="./reader-controls.js" defer></script>
+  <script src="./reader-layout.js" defer></script>
+  <script src="./nas-ui.js" defer></script>
   <script src="./app.js" defer></script>
   <title>오프라인 TXT 책장</title>
   <style>
@@ -51,6 +60,7 @@
       <button id="chaptersBtn" type="button" disabled>책장</button>
     </div>
     <div class="toolbar" aria-label="읽기 설정">
+      <button id="homeBtn" type="button">홈</button>
       <button id="editBtn" type="button" disabled>편집</button>
       <button id="fontDownBtn" type="button" aria-label="글자 크기 줄이기">A−</button>
       <button id="fontUpBtn" type="button" aria-label="글자 크기 키우기">A+</button>
@@ -106,23 +116,17 @@
     </div>
     <div id="chapterList" class="chapter-list dialog-body"></div>
     <div class="dialog-actions"><button id="addToBookBtn" type="button">TXT 추가</button><button id="deleteBookBtn" class="danger" type="button">선택한 책 삭제</button></div>
-  </dialog>
-  <dialog id="helpDialog" aria-labelledby="helpTitle">
-    <div class="dialog-head"><h2 id="helpTitle">관리</h2><button type="button" data-close>닫기</button></div>
-    <div class="dialog-body">
-      <h3>기기 저장 공간</h3>
-      <p id="storageInfo" class="small"></p>
-      <button id="persistBtn" class="wide" type="button">저장 공간 보호 요청</button>
-      <p id="persistInfo" class="small"></p>
-      <h3>책장 백업</h3>
+    <details class="library-backup">
+      <summary>백업·복원</summary>
+      <div class="library-backup-content">
       <div class="button-row"><button id="exportBtn" type="button" disabled>백업 만들기</button><button id="restoreBtn" type="button" disabled>백업 불러오기</button></div>
       <p id="backupStatus" class="small" role="status"></p>
       <div id="backupReady" class="button-row" hidden><a id="backupLink" class="button primary" download>백업 파일 저장</a><button id="shareBackupBtn" type="button" hidden>공유</button></div>
-      <p class="small">버전 2.3.2</p>
-      <button id="checkOfflineBtn" type="button" hidden></button>
-      <p id="cacheDetails" hidden></p>
-    </div>
+      </div>
+    </details>
   </dialog>
+  <button id="checkOfflineBtn" type="button" hidden></button>
+  <p id="cacheDetails" hidden></p>
   <input id="fileInput" type="file" accept=".txt,text/plain" multiple hidden>
   <input id="backupInput" type="file" accept=".json,application/json" hidden>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -140,6 +144,8 @@
     let firstTap = null;
     let firstTapTimer = 0;
     let touchCandidate = null;
+    let mouseSelectionBeforeTap = false;
+    let lastTouchToggleAt = -Infinity;
     const DOUBLE_TAP_MS = 380;
     const DOUBLE_TAP_DISTANCE = 42;
     const TAP_MOVE_LIMIT = 12;
@@ -160,6 +166,7 @@
     function hideBars() {
       if (!reading() || modalOpen()) return;
       if (topbar.contains(document.activeElement) || bottombar.contains(document.activeElement)) document.activeElement.blur();
+      window.TextviewReaderUI?.closeSettings(false);
       document.body.classList.remove('show-topbar', 'show-bottombar');
       $('showControls').setAttribute('aria-expanded', 'false');
     }
@@ -246,7 +253,7 @@
       const candidate = touchCandidate;
       touchCandidate = null;
       if (!candidate || candidate.moved || event.changedTouches.length !== 1) return;
-      if (!reading() || modalOpen() || hasSelection()) {
+      if (!reading() || modalOpen()) {
         clearFirstTap();
         return;
       }
@@ -270,9 +277,13 @@
           Math.hypot(currentTap.x - firstTap.x, currentTap.y - firstTap.y) <= DOUBLE_TAP_DISTANCE) {
         clearFirstTap();
         if (event.cancelable) event.preventDefault();
+        if (hasSelection()) window.getSelection()?.removeAllRanges();
+        lastTouchToggleAt = endedAt;
         toggleBars();
         return;
       }
+
+      if (hasSelection()) { clearFirstTap(); return; }
 
       clearFirstTap();
       firstTap = currentTap;
@@ -288,12 +299,20 @@
       touchCandidate = null;
       clearFirstTap();
     }, { passive: true });
+    document.addEventListener('textview:pagechange', () => {
+      touchCandidate = null;
+      clearFirstTap();
+    });
 
     // Desktop fallback. This does not participate in iPhone touch detection.
+    readerShell.addEventListener('mousedown', event => {
+      if (event.detail <= 1) mouseSelectionBeforeTap = hasSelection();
+    });
     readerShell.addEventListener('dblclick', event => {
-      if (!reading() || modalOpen() || hasSelection()) return;
+      if (!reading() || modalOpen() || mouseSelectionBeforeTap || performance.now() - lastTouchToggleAt < 700) return;
       if (event.target.closest('button, input, textarea, select, a, [contenteditable]')) return;
       event.preventDefault();
+      if (hasSelection()) window.getSelection()?.removeAllRanges();
       toggleBars();
     });
 
@@ -306,7 +325,7 @@
       if (event.key.toLowerCase() === 'm') toggleBars();
       if (event.key === 'Escape') hideBars();
     });
-    $('showControls').addEventListener('click', () => { showBars(); $('openBtn').focus({ preventScroll: true }); });
+    $('showControls').addEventListener('click', () => { showBars(); ($('readerSettingsButton') || $('openBtn')).focus({ preventScroll: true }); });
     $('chapterJumpBtn').addEventListener('click', () => {
       if (!reading() || modalOpen() || $('chaptersBtn').disabled) return;
       // Reuse the app's current-book selector and chapter navigation, not a
@@ -344,6 +363,7 @@
       });
     }
     function ratio() {
+      if (window.TextviewReaderLayout?.getState().active) return window.TextviewReaderLayout.getRatio();
       const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
       if (!max) return 0;
       return Math.max(0, Math.min(1, scrollY / max));
@@ -479,6 +499,7 @@
         try { localStorage.setItem(prefix + 'last', JSON.stringify(record)); } catch {}
         // Reinitialization refreshes the existing app's private chapter metadata
         // and reads the committed text from the same offline database.
+        try { sessionStorage.setItem(prefix + 'returnToReader', snapshot.meta.id); } catch {}
         location.reload();
       } catch (error) {
         if (error?.name === 'QuotaExceededError') $('editError').textContent = '저장 공간이 부족합니다. 수정 내용은 이 창에 남아 있습니다.';

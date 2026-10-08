@@ -1,0 +1,189 @@
+/* The home has its own dark palette. Existing reader preferences stay intact. */
+body.home-visible {
+  --bg: #151618;
+  --panel: #1c1d22;
+  --text: #f7f7f8;
+  --muted: #a6a6ae;
+  --border: rgba(255,255,255,.13);
+  --accent: #c5acee;
+  background: #151618;
+  color: #f7f7f8;
+}
+
+body.home-visible > .topbar,
+body.home-visible > .reader-shell,
+body.home-visible > .bottombar,
+body.home-visible > #showControls { display: none; }
+
+html:has(body.home-visible) { scrollbar-width: none; }
+html:has(body.home-visible)::-webkit-scrollbar { display: none; }
+
+.home-screen {
+  --home-bg: #151618;
+  --home-black: #08090b;
+  --home-text: #f7f7f8;
+  --home-muted: #a6a6ae;
+  --home-lavender: #c5acee;
+  --home-border: rgba(255,255,255,.13);
+  width: 100%;
+  max-width: 780px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 0 max(0px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left));
+  background: var(--home-bg);
+  color: var(--home-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+  letter-spacing: -.025em;
+  -webkit-font-smoothing: antialiased;
+}
+
+.home-screen[hidden], .home-screen [hidden] { display: none !important; }
+.home-screen * { box-sizing: border-box; }
+.home-screen h1, .home-screen h2, .home-screen h3, .home-screen p { margin: 0; }
+.home-screen button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  touch-action: manipulation;
+}
+.home-screen button:active { transform: none; opacity: .76; }
+.home-screen button:disabled { opacity: .42; }
+.home-screen button:focus-visible,
+.home-screen input:focus-visible,
+.home-hero-track:focus-visible { outline: 2px solid var(--home-lavender); outline-offset: 3px; }
+.home-screen svg { flex-shrink: 0; width: 24px; height: 24px; vertical-align: middle; }
+
+.home-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  padding-top: max(12px, env(safe-area-inset-top));
+  background: var(--home-black);
+}
+.home-toprow { display: flex; align-items: center; justify-content: space-between; min-height: 66px; padding: 0 16px 8px 18px; }
+.home-logo { font-size: 27px; line-height: 1; font-weight: 900; letter-spacing: -.07em; }
+.home-header-actions { display: flex; gap: 3px; align-items: center; margin-right: -6px; }
+.home-screen .home-icon-button { display: inline-flex; justify-content: center; align-items: center; flex: 0 0 44px; width: 44px; height: 44px; }
+.home-header-actions svg { width: 25px; height: 25px; }
+.home-navigation { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0 14px; }
+.home-screen .home-navigation button { position: relative; min-height: 52px; padding-bottom: 6px; color: #97979f; font-size: 16px; font-weight: 650; white-space: nowrap; }
+.home-screen .home-navigation button.is-active { color: var(--home-text); font-weight: 800; }
+.home-navigation button.is-active::after { content: ""; position: absolute; left: 12%; right: 12%; height: 3px; bottom: 0; border-radius: 4px; background: var(--home-lavender); }
+
+.home-featured { position: relative; padding-top: 9px; }
+.home-hero-track { position: relative; display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; padding: 0 18px; scroll-padding-inline: 18px; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.home-hero-track::-webkit-scrollbar, .home-book-rail::-webkit-scrollbar { display: none; }
+.home-art { background-image: url('./assets/home-art.png'); background-repeat: no-repeat; background-size: 200% 200%; background-color: #33313b; }
+.home-art-0 { background-position: 0 0; }
+.home-art-1 { background-position: 100% 0; }
+.home-art-2 { background-position: 0 100%; }
+.home-art-3 { background-position: 100% 100%; }
+.home-hero-slide { position: relative; flex: 0 0 100%; width: 100%; min-height: 218px; aspect-ratio: 1.84; overflow: hidden; scroll-snap-align: center; border-radius: 8px; isolation: isolate; }
+.home-hero-slide::before { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(4,6,11,.74), rgba(4,6,11,.34) 70%, rgba(4,6,11,.16)), linear-gradient(0deg, rgba(4,6,11,.26), transparent 80%); z-index: -1; }
+.home-hero-copy { padding: 18px; max-width: 92%; height: 100%; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; text-shadow: 0 2px 14px rgba(0,0,0,.5); }
+.home-hero-copy > * { flex-shrink: 0; }
+.home-hero-slide { min-height: 232px; }
+.home-hero-welcome .home-hero-title { font-size: 28px; line-height: 1.2; }
+.home-hero-eyebrow { font-size: 14px; line-height: 1.3; font-weight: 650; }
+.home-hero-title { max-width: 100%; margin-top: 8px !important; font-family: Georgia, "Times New Roman", "Apple SD Gothic Neo", serif; font-size: clamp(25px, 7.7vw, 39px); line-height: 1.27; letter-spacing: -.05em; font-weight: 750; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.home-hero-chapter { max-width: 100%; margin-top: 7px !important; color: #f0edf4; font-size: 15px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-screen .home-primary-button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 44px; padding: 0 17px; border-radius: 30px; background: #ad91da; color: #16101e; font-size: 15px; line-height: 1.2; font-weight: 750; text-shadow: none; }
+.home-primary-button svg { width: 17px; height: 17px; stroke-width: 2; }
+.home-hero-copy .home-primary-button { margin-top: 16px; }
+.home-screen .home-hero-pager { position: absolute; bottom: 10px; right: 27px; min-height: 44px; min-width: 66px; padding: 0 9px; display: inline-flex; align-items: center; justify-content: center; gap: 2px; background: rgba(10,11,16,.72); border: 1px solid rgba(255,255,255,.18); border-radius: 11px; color: #f7f5fc; font-size: 12px; font-variant-numeric: tabular-nums; }
+.home-hero-pager svg { width: 14px; height: 14px; }
+
+.home-library-section { padding: 16px 18px 0; }
+.home-section-head { display: flex; justify-content: space-between; align-items: center; gap: 7px; min-height: 44px; margin-bottom: 7px; }
+.home-section-head h2 { font-size: 19px; line-height: 1.3; font-weight: 800; letter-spacing: -.045em; }
+.home-screen .home-text-button { flex-shrink: 0; min-height: 44px; display: inline-flex; align-items: center; gap: 1px; color: #bbbcc3; font-size: 12px; white-space: nowrap; }
+.home-text-button svg { width: 17px; height: 17px; }
+.home-book-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); column-gap: 9px; row-gap: 22px; }
+.home-screen .home-book-card { min-width: 0; width: 100%; display: flex; flex-direction: column; align-items: stretch; text-align: left; }
+.home-book-cover { position: relative; width: 100%; aspect-ratio: .675; border: 1px solid var(--home-border); border-radius: 5px; overflow: hidden; display: flex; align-items: flex-start; justify-content: center; isolation: isolate; }
+.home-book-cover::after { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(3,5,11,.43), rgba(3,5,11,.12) 62%, rgba(3,5,11,.18)); }
+.home-cover-title { width: 100%; margin-top: 19%; padding: 0 9px; font-family: Georgia, "Times New Roman", "Apple SD Gothic Neo", serif; font-size: clamp(16px,5.1vw,27px); line-height: 1.26; letter-spacing: -.055em; text-align: center; word-break: keep-all; overflow-wrap: anywhere; text-shadow: 0 2px 7px #121219, 0 0 12px rgba(0,0,0,.35); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+.home-book-name { margin-top: 7px; font-size: 14px; line-height: 1.4; font-weight: 700; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.home-book-meta { margin-top: 3px; font-size: 11px; color: #a8a8b1; line-height: 1.4; font-variant-numeric: tabular-nums; }
+
+.home-recent-section { margin-top: 23px; scroll-margin-top: calc(136px + env(safe-area-inset-top)); }
+.home-recent-head { margin: 0 18px 6px; }
+.home-section-tabs { display: flex; gap: 19px; }
+.home-screen .home-section-tabs button { position: relative; min-height: 44px; padding: 0 0 7px; color: #a4a4ac; font-size: 17px; font-weight: 650; white-space: nowrap; }
+.home-screen .home-section-tabs button.is-active { color: var(--home-text); font-size: 19px; font-weight: 800; }
+.home-section-tabs button.is-active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 3px; background: var(--home-lavender); }
+.home-book-rail { display: flex; align-items: flex-start; gap: 9px; overflow-x: auto; overflow-y: hidden; padding: 3px 18px 9px; scroll-padding-inline: 18px; scrollbar-width: none; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+.home-screen .home-book-card-compact { flex: 0 0 87px; width: 87px; }
+.home-book-card-compact .home-book-cover { aspect-ratio: .675; }
+.home-book-card-compact .home-cover-title { font-size: 15px; }
+.home-book-card-compact .home-book-name { font-size: 12px; line-height: 1.35; }
+.home-recent-empty { padding: 14px 18px 24px; color: var(--home-muted); font-size: 13px; line-height: 1.6; }
+
+.home-library-empty { text-align: center; padding: 11px 0 12px; }
+.home-empty-books { display: flex; justify-content: center; gap: 11px; margin-bottom: 17px; }
+.home-empty-books span { width: 29%; aspect-ratio: .675; background: linear-gradient(130deg, #282534, #191b22); border: 1px solid rgba(197,172,238,.12); border-radius: 5px; position: relative; }
+.home-empty-books span::before { content: ""; position: absolute; width: 29px; height: 36px; top: 38%; left: calc(50% - 14px); border: 1px solid rgba(197,172,238,.27); border-radius: 2px 5px 5px 2px; box-shadow: inset 5px 0 rgba(197,172,238,.07); }
+.home-empty-books span:nth-child(2) { background: linear-gradient(130deg, #242b35, #191b22); }
+.home-empty-books span:nth-child(3) { background: linear-gradient(130deg, #2c2929, #191b22); }
+.home-library-empty h3 { color: #e5e1ed; font-size: 17px; font-weight: 700; }
+.home-library-empty p { margin-top: 8px; color: var(--home-muted); font-size: 13px; line-height: 1.6; }
+.home-library-empty .home-primary-button { margin-top: 15px; }
+.home-load-status { padding: 22px 0; color: var(--home-muted); font-size: 14px; text-align: center; line-height: 1.6; }
+
+.home-search-panel { padding: 11px 18px 15px; }
+.home-search-field { display: flex; align-items: center; gap: 9px; padding-left: 13px; border: 1px solid #494051; background: #1b191f; border-radius: 8px; }
+.home-search-field > svg { width: 20px; height: 20px; color: #c8b1e6; }
+.home-search-field input { display: block; width: 100%; min-width: 0; min-height: 44px; border: 0; padding: 0; background: transparent; color: #f7f7f8; font: inherit; font-size: 16px; outline: none; border-radius: 0; }
+.home-search-field input::placeholder { color: #919099; }
+.home-search-field:focus-within { border-color: var(--home-lavender); }
+.home-search-field input:focus-visible { outline: none; }
+.home-search-field input::-webkit-search-cancel-button { cursor: pointer; }
+.home-search-field .home-icon-button { color: #aba8b3; }
+.home-search-field .home-icon-button svg { width: 19px; height: 19px; }
+.home-search-results { padding: 17px 18px 32px; }
+.home-search-count { color: #aaa6b0; font-size: 12px; }
+.home-search-empty { padding: 45px 0; color: var(--home-muted); font-size: 14px; text-align: center; }
+.home-screen.is-searching .home-normal-content { display: none; }
+
+@media (max-width: 374px) {
+  .home-toprow { padding-left: 16px; padding-right: 14px; }
+  .home-logo { font-size: 25px; }
+  .home-header-actions { gap: 0; }
+  .home-header-actions .home-icon-button { width: 44px; flex-basis: 44px; }
+  .home-library-section { padding-left: 16px; padding-right: 16px; }
+  .home-hero-track { padding-left: 16px; padding-right: 16px; scroll-padding-inline: 16px; }
+  .home-section-head h2 { font-size: 18px; }
+  .home-book-grid { column-gap: 8px; }
+  .home-book-name { font-size: 13px; }
+  .home-book-meta { font-size: 10px; }
+  .home-recent-head { margin-left: 16px; margin-right: 16px; }
+  .home-section-tabs { gap: 17px; }
+  .home-screen .home-section-tabs button { font-size: 16px; }
+  .home-screen .home-section-tabs button.is-active { font-size: 18px; }
+  .home-book-rail { padding-left: 16px; padding-right: 16px; }
+}
+
+@media (min-width: 600px) {
+  .home-toprow { padding-top: 8px; }
+  .home-hero-slide { min-height: 300px; aspect-ratio: 2.2; }
+  .home-hero-copy { padding: 32px; }
+  .home-hero-title { font-size: 42px; }
+  .home-library-section { padding-top: 22px; }
+  .home-book-grid { column-gap: 15px; }
+  .home-cover-title { font-size: 35px; }
+  .home-book-name { font-size: 17px; }
+  .home-book-meta { font-size: 13px; }
+  .home-screen .home-book-card-compact { flex-basis: 132px; width: 132px; }
+  .home-book-card-compact .home-cover-title { font-size: 21px; }
+  .home-book-card-compact .home-book-name { font-size: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-screen *, .home-hero-track { scroll-behavior: auto !important; }
+}

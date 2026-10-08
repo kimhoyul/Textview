@@ -5,12 +5,17 @@
   const PREFIX = 'offline-txt-v2:' + BASE.pathname + ':';
   const DB_NAME = PREFIX + 'bookshelf';
   const MAX_FILE_BYTES = 32 * 1024 * 1024;
-  const DEFAULTS = { fontSize: 20, lineHeight: 1.9, padding: 22, dark: false };
+  const DEFAULTS = { fontSize: 20, lineHeight: 1.9, padding: 12, verticalPadding: 12,
+    dark: true, wrap: 'word', viewMode: 'page', pageEffect: 'curl' };
   const collator = new Intl.Collator('ko', { numeric: true, sensitivity: 'base' });
   const memoryState = new Map();
   let db = null;
   let chapters = [];
   let current = null;
+  let readingActive = false;
+  let shelfActive = false;
+  let nasActive = false;
+  let homeError = '';
   let settings = { ...DEFAULTS };
   let busy = false;
   let switching = false;
@@ -19,6 +24,7 @@
   let toastTimer;
   let lastRatio = 0;
   let layoutToken = 0;
+  let pendingLayoutRatio = null;
   let lastWidth = innerWidth;
   let stateErrorShown = false;
   let offlineReady = false;
@@ -126,8 +132,12 @@
     return {
       fontSize: clamp(value.fontSize, 14, 34, 20),
       lineHeight: clamp(value.lineHeight, 1.4, 2.4, 1.9),
-      padding: clamp(value.padding, 12, 40, 22),
-      dark: value.dark === true
+      padding: clamp(value.padding, 12, 40, DEFAULTS.padding),
+      verticalPadding: clamp(value.verticalPadding, 12, 40, DEFAULTS.verticalPadding),
+      dark: typeof value.dark === 'boolean' ? value.dark : DEFAULTS.dark,
+      wrap: value.wrap === 'character' ? 'character' : 'word',
+      viewMode: value.viewMode === 'scroll' ? 'scroll' : 'page',
+      pageEffect: ['none', 'slide', 'curl'].includes(value.pageEffect) ? value.pageEffect : DEFAULTS.pageEffect
     };
   }
   function formatBytes(bytes) {
@@ -162,9 +172,85 @@
     document.querySelectorAll('dialog [data-close]').forEach(button => { button.disabled = busy; });
     $('deleteBookBtn').disabled = busy || !db || inBook($('bookSelect').value).length === 0;
     updateNavigation();
+    renderHome();
+  }
+
+  // Home shares the existing chapter metadata and state, without a second library.
+  function renderHome() {
+    if (!window.TextviewHome && !window.TextviewShelf) return;
+    const globalLast = readState('last', null);
+    const books = [...new Set(chapters.map(chapter => chapter.book))].map(name => {
+      const list = inBook(name);
+      const savedId = readState('lastBook:' + name, null);
+      const isLastBook = list.some(chapter => chapter.id === globalLast);
+      const saved = list.find(chapter => chapter.id === globalLast) || list.find(chapter => chapter.id === savedId);
+      const chapter = saved || list[0];
+      return {
+        name, count: list.length,
+        bytes: list.reduce((sum, item) => sum + item.bytes, 0),
+        addedAt: list.reduce((latest, item) => Math.max(latest, item.addedAt || 0), 0),
+        lastReadAt: saved ? memoryState.get(isLastBook ? 'last' : 'lastBook:' + name)?.updatedAt || 0 : 0,
+        chapterId: chapter.id, chapterName: cleanName(chapter.name),
+        ratio: ratioOf(chapter.id), hasRead: !!saved
+      };
+    });
+    books.sort((a, b) => b.addedAt - a.addedAt || collator.compare(a.name, b.name));
+    for (const book of books) {
+      const list = inBook(book.name);
+      book.progressRatio = (list.findIndex(chapter => chapter.id === book.chapterId) + book.ratio) / list.length;
+      book.artIndex = window.TextviewHome?.getArtIndex(book.name) || 0;
+    }
+    const data = { books, lastId: readState('last', null), ready: !!db && !busy, error: homeError };
+    window.TextviewHome?.render(data);
+    window.TextviewShelf?.render(data);
+    window.TextviewNAS?.render({ ready: !!db && !busy, error: homeError });
+  }
+
+  function showHome() {
+    if (busy || switching || suppressPosition) return;
+    savePosition();
+    readingActive = false;
+    shelfActive = false;
+    nasActive = false;
+    window.TextviewNAS?.hide();
+    window.TextviewReaderUI?.hide();
+    window.TextviewReaderLayout?.hide();
+    $('reader').hidden = true;
+    renderHome();
+    window.TextviewShelf?.hide();
+    window.TextviewHome?.show();
+    $('themeColor').content = '#111214';
+    document.title = 'TEXTVIEW · 홈';
+    window.scrollTo(0, 0);
+  }
+
+  function openLibrary(book) {
+    if (busy || switching || !db) return;
+    savePosition();
+    $('chapterSearch').value = '';
+    renderBooks(book || current?.book);
+    showDialog('libraryDialog');
+  }
+
+  function showShelf() {
+    if (busy || switching || suppressPosition || !db) return;
+    savePosition();
+    readingActive = false;
+    shelfActive = true;
+    nasActive = false;
+    window.TextviewNAS?.hide();
+    window.TextviewReaderUI?.hide();
+    window.TextviewReaderLayout?.hide();
+    $('reader').hidden = true;
+    renderHome();
+    window.TextviewHome?.hide();
+    window.TextviewShelf?.show();
+    $('themeColor').content = '#08090b';
+    document.title = 'TEXTVIEW · 보관함';
   }
 
   function getRatio() {
+    if (readingActive && window.TextviewReaderLayout) return window.TextviewReaderLayout.getRatio();
     const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
     if (max === 0) return 0;
     return clamp(scrollY / max, 0, 1, 0);
@@ -174,20 +260,86 @@
   }
   function savePosition() {
     clearTimeout(positionTimer);
-    if (!current || suppressPosition || switching) return;
+    if (!readingActive || !current || suppressPosition || switching) return;
     lastRatio = getRatio();
     writeState('position:' + current.id, { ratio: lastRatio });
   }
   function scrollToRatio(ratio) {
+    if (readingActive && window.TextviewReaderLayout) {
+      window.TextviewReaderLayout.setRatio(ratio);
+      lastRatio = ratio;
+      return;
+    }
     const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
     window.scrollTo(0, max * ratio);
     lastRatio = ratio;
   }
   function updateProgress() {
+    if (!readingActive) { renderReaderUI(); return; }
     if (!current) { $('scrollProgress').textContent = '0%'; return; }
     const ratio = getRatio();
     $('scrollProgress').textContent = Math.round(ratio * 100) + '%';
     if (!suppressPosition && !switching) lastRatio = ratio;
+    renderReaderUI();
+  }
+
+  function showNAS() {
+    if (busy || switching || suppressPosition) return;
+    savePosition();
+    readingActive = false;
+    shelfActive = false;
+    nasActive = true;
+    window.TextviewReaderUI?.hide();
+    window.TextviewReaderLayout?.hide();
+    $('reader').hidden = true;
+    window.TextviewHome?.hide();
+    window.TextviewShelf?.hide();
+    renderHome();
+    window.TextviewNAS?.show();
+    document.title = 'TEXTVIEW · NAS';
+  }
+  function renderReaderUI() {
+    if (!window.TextviewReaderUI) return;
+    const list = current ? inBook(current.book) : [];
+    const index = list.findIndex(chapter => chapter.id === current?.id);
+    const layout = window.TextviewReaderLayout?.getState() || {};
+    window.TextviewReaderUI.render({ active: readingActive && !!current,
+      ready: !!db && !busy && !switching && !suppressPosition && !layout.transitioning, settings,
+      chapterName: current ? cleanName(current.name) : '', bookName: current?.book || '',
+      bookmarked: !!(current && readState('bookmark:' + current.id, null)),
+      ratio: lastRatio, page: layout.page || 1, pageCount: layout.pageCount || 1,
+      canPrevChapter: index > 0, canNextChapter: index >= 0 && index < list.length - 1 });
+  }
+
+  function readerLayoutWillChange() {
+    if (!readingActive || switching || pendingLayoutRatio !== null || suppressPosition) return;
+    pendingLayoutRatio = getRatio();
+    suppressPosition = true;
+    clearTimeout(positionTimer);
+  }
+  async function readerLayoutChanged() {
+    if (!readingActive || switching) { pendingLayoutRatio = null; return; }
+    const ratio = pendingLayoutRatio ?? lastRatio;
+    const token = ++layoutToken;
+    suppressPosition = true;
+    clearTimeout(positionTimer);
+    await frames();
+    if (token !== layoutToken) return;
+    await window.TextviewReaderLayout?.reflow(ratio);
+    await frames();
+    if (token !== layoutToken) return;
+    pendingLayoutRatio = null;
+    suppressPosition = false;
+    updateProgress();
+    savePosition();
+  }
+
+  function readerMoved() {
+    updateProgress();
+    if (readingActive && current && !switching && !suppressPosition) {
+      clearTimeout(positionTimer);
+      positionTimer = setTimeout(savePosition, 300);
+    }
   }
   function frames() { return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); }
 
@@ -198,12 +350,21 @@
     savePosition();
     switching = true;
     suppressPosition = true;
+    pendingLayoutRatio = null;
+    window.TextviewReaderUI?.closeSettings(false, false);
     updateNavigation();
     try {
       const savedRatio = ratioOf(id);
       const content = await dbRequest('texts', 'get', id);
       if (!content || typeof content.text !== 'string') throw new Error('이 TXT의 본문을 찾지 못했습니다. 원본 파일을 다시 가져와 주세요.');
       current = meta;
+      readingActive = true;
+      shelfActive = false;
+      nasActive = false;
+      window.TextviewNAS?.hide();
+      window.TextviewHome?.hide();
+      window.TextviewShelf?.hide();
+      applySettings();
       $('reader').textContent = content.text; // TXT is never interpreted as HTML.
       $('reader').hidden = false;
       $('empty').hidden = true;
@@ -212,7 +373,10 @@
       document.title = cleanName(meta.name) + ' · TXT 책장';
       writeState('last', meta.id);
       writeState('lastBook:' + meta.book, meta.id);
+      window.TextviewReaderLayout?.show();
+      renderReaderUI();
       await frames();
+      await window.TextviewReaderLayout?.reflow(savedRatio);
       scrollToRatio(savedRatio);
       await frames();
     } catch (error) { showToast(explainError(error)); }
@@ -234,6 +398,7 @@
     $('nextBtn').disabled = busy || switching || index < 0 || index >= list.length - 1;
     if (index < 0) $('chapterProgress').textContent = '- / -';
     else $('chapterProgress').textContent = (index + 1) + ' / ' + list.length;
+    renderReaderUI();
   }
   async function goChapter(offset) {
     if (!current || busy || switching) return;
@@ -246,11 +411,15 @@
     root.setProperty('--font-size', settings.fontSize + 'px');
     root.setProperty('--line-height', settings.lineHeight);
     root.setProperty('--reader-padding', settings.padding + 'px');
+    root.setProperty('--reader-vertical-padding', settings.verticalPadding + 'px');
+    window.TextviewReaderLayout?.configure(settings);
     document.body.classList.toggle('dark', settings.dark);
     if (settings.dark) { $('themeBtn').textContent = '라이트'; $('themeColor').content = '#111214'; }
     else { $('themeBtn').textContent = '다크'; $('themeColor').content = '#f7f4ef'; }
+    if (!readingActive) $('themeColor').content = '#111214';
     $('lineBtn').textContent = '줄간격 ' + settings.lineHeight;
     $('paddingBtn').textContent = '여백 ' + settings.padding;
+    renderReaderUI();
   }
   async function changeSettings(change) {
     if (switching) return;
@@ -263,10 +432,13 @@
     writeState('settings', settings);
     await frames();
     if (token !== layoutToken) return;
-    if (current) scrollToRatio(ratio);
+    await window.TextviewReaderLayout?.reflow(ratio);
+    if (token !== layoutToken) return;
+    if (readingActive && current) scrollToRatio(ratio);
     await frames();
     if (token !== layoutToken) return;
     suppressPosition = false;
+    pendingLayoutRatio = null;
     updateProgress();
     savePosition();
   }
@@ -281,6 +453,7 @@
     renderBooks();
     updateNavigation();
     renderOfflineStatus();
+    renderHome();
   }
   function renderBooks(preferredBook) {
     let selected = preferredBook || $('bookSelect').value;
@@ -329,9 +502,14 @@
     $('chapterList').replaceChildren(fragment);
     $('librarySummary').textContent = '저장된 TXT ' + list.length + '개 · ' + formatBytes(list.reduce((sum, item) => sum + item.bytes, 0));
     $('deleteBookBtn').disabled = busy || list.length === 0;
+    $('addToBookBtn').hidden = !shelfActive;
   }
   function openImport(book) {
-    if (!db || busy || switching) return;
+    if (!db || busy || switching || suppressPosition) return;
+    if (!shelfActive) {
+      showShelf();
+      if (!shelfActive) return;
+    }
     let selected = book;
     if (!selected && current) selected = current.book;
     if (!selected) selected = readState('importBook', '내 책');
@@ -361,10 +539,10 @@
     return { text, encoding };
   }
 
-  async function importFiles(files) {
-    if (busy || !db || files.length === 0) return;
-    const book = ($('bookName').value.trim() || '내 책').normalize('NFC').slice(0, 100);
-    const encoding = $('encoding').value;
+  async function importFiles(files, options = {}) {
+    if (busy || !db || files.length === 0) return { added: 0, skipped: 0, failed: files.length, details: ['서재에 추가할 수 없습니다.'] };
+    const book = ((options.bookName ?? $('bookName').value).trim() || '내 책').normalize('NFC').slice(0, 100);
+    const encoding = options.encoding ?? $('encoding').value;
     const known = new Set(chapters.map(chapter => chapter.id));
     let added = 0, skipped = 0, failed = 0;
     const details = [];
@@ -407,12 +585,20 @@
     } catch (error) { $('importStatus').textContent = explainError(error); }
     finally { setBusy(false); $('fileInput').value = ''; }
     const list = inBook(book);
-    if (list.length && current?.book !== book) {
+    if (readingActive && list.length && current?.book !== book) {
       let id = readState('lastBook:' + book, list[0].id);
       if (!list.some(item => item.id === id)) id = list[0].id;
       await openChapter(id);
     }
     renderBooks(book);
+    return { added, skipped, failed, details };
+  }
+
+  async function importDownloaded(files, bookName) {
+    if (!db || busy || switching || suppressPosition) throw new Error('서재에 추가할 수 없습니다. 잠시 후 다시 시도해 주세요.');
+    if (!Array.isArray(files) || !files.length || typeof bookName !== 'string') throw new Error('TXT 파일과 책 이름을 확인해 주세요.');
+    if (files.some(file => !(file instanceof File) || !/\.txt$/i.test(file.name) || file.size > MAX_FILE_BYTES)) throw new Error('32 MB 이하의 TXT 파일만 추가할 수 있습니다.');
+    return importFiles(files, { bookName, encoding: 'auto' });
   }
 
   async function deleteBook() {
@@ -429,6 +615,7 @@
           tx.objectStore('chapters').delete(chapter.id);
           tx.objectStore('texts').delete(chapter.id);
           tx.objectStore('state').delete('position:' + chapter.id);
+          tx.objectStore('state').delete('bookmark:' + chapter.id);
         }
         tx.oncomplete = resolve;
         tx.onabort = () => reject(tx.error);
@@ -436,9 +623,14 @@
       });
       for (const chapter of list) {
         memoryState.delete('position:' + chapter.id);
+        memoryState.delete('bookmark:' + chapter.id);
         try { localStorage.removeItem(PREFIX + 'position:' + chapter.id); } catch {}
+        try { localStorage.removeItem(PREFIX + 'bookmark:' + chapter.id); } catch {}
       }
       if (current?.book === book) {
+        readingActive = false;
+        window.TextviewReaderUI?.hide();
+        window.TextviewReaderLayout?.hide();
         current = null;
         clearTimeout(positionTimer);
         $('reader').textContent = '';
@@ -455,7 +647,10 @@
       updateProgress();
       showToast('선택한 책을 삭제했습니다.');
     } catch (error) { showToast(explainError(error)); }
-    finally { setBusy(false); renderChapterList(); }
+    finally {
+      setBusy(false); renderChapterList();
+    if (!current && !shelfActive && !nasActive) showHome();
+    }
   }
 
   async function makeBackup() {
@@ -470,7 +665,8 @@
       const items = chapters.map(meta => {
         const text = byId.get(meta.id);
         if (typeof text !== 'string') throw new Error('누락된 본문이 있어 백업을 중단했습니다: ' + meta.name);
-        return { book: meta.book, name: meta.name, text, encoding: meta.encoding, position: ratioOf(meta.id) };
+        return { book: meta.book, name: meta.name, text, encoding: meta.encoding,
+          position: ratioOf(meta.id), bookmark: readState('bookmark:' + meta.id, null) };
       });
       const payload = { format: 'offline-txt-bookshelf', version: 1, exportedAt: new Date().toISOString(),
         settings, last: readState('last', null), chapters: items };
@@ -511,6 +707,9 @@
         await saveChapter({ id, book, name: item.name, bytes: new Blob([item.text]).size, encoding: 'backup', addedAt: Date.now() }, item.text);
         known.add(id);
         writeState('position:' + id, { ratio: clamp(item.position, 0, 1, 0) });
+        if (item.bookmark && typeof item.bookmark.ratio === 'number') {
+          writeState('bookmark:' + id, { ratio: clamp(item.bookmark.ratio, 0, 1, 0) });
+        }
         added++;
         if (added % 10 === 0) {
           $('backupStatus').textContent = added + '개 복원 중…';
@@ -530,7 +729,7 @@
       setBusy(false);
       $('backupInput').value = '';
     }
-    if (!current && chapters.length) {
+    if (readingActive && !current && chapters.length) {
       let id = readState('last', chapters[0].id);
       if (!chapters.some(chapter => chapter.id === id)) id = chapters[0].id;
       await openChapter(id);
@@ -615,19 +814,23 @@
     }
   }
 
-  async function showStorage() {
-    $('persistInfo').textContent = '보호를 요청해도 기기나 브라우저가 승인하지 않을 수 있습니다.';
-    try {
-      if (navigator.storage?.estimate) {
-        const estimate = await navigator.storage.estimate();
-        $('storageInfo').textContent = '이 웹 주소의 사용량 약 ' + formatBytes(estimate.usage || 0) + ' / 허용량 약 ' + formatBytes(estimate.quota || 0);
-      } else $('storageInfo').textContent = '이 환경에서는 저장 공간 사용량을 표시할 수 없습니다.';
-      if (navigator.storage?.persisted) {
-        if (await navigator.storage.persisted()) $('persistInfo').textContent = '저장 공간 보호가 승인된 상태입니다. 사용자가 데이터를 삭제하면 복구되지 않으므로 백업은 보관하세요.';
-      }
-    } catch { $('storageInfo').textContent = '저장 공간 정보를 읽지 못했습니다.'; }
+  async function openHelp() {
+    if (busy || switching || !db) return;
+    if (!readingActive) {
+      const id = current?.id || readState('last', null) || chapters[0]?.id;
+      if (!id) { showToast('작품을 선택한 뒤 읽기 설정을 열어 주세요.'); return; }
+      await openChapter(id);
+    }
+    if (readingActive) window.TextviewReaderUI?.openSettings();
   }
-  function openHelp() { showDialog('helpDialog'); void showStorage(); void checkOffline(); }
+
+  function toggleBookmark() {
+    if (!readingActive || !current || busy || switching) return;
+    const key = 'bookmark:' + current.id;
+    const marked = readState(key, null);
+    writeState(key, marked ? null : { ratio: getRatio() });
+    renderReaderUI();
+  }
 
   // Event bindings: file pickers and sharing are opened directly by user gestures.
   $('openBtn').addEventListener('click', () => openImport());
@@ -636,13 +839,30 @@
   $('fileInput').addEventListener('change', () => { void importFiles(Array.from($('fileInput').files || [])); });
   $('prevBtn').addEventListener('click', () => { void goChapter(-1); });
   $('nextBtn').addEventListener('click', () => { void goChapter(1); });
-  $('chaptersBtn').addEventListener('click', () => {
-    if (busy || switching) return;
-    savePosition();
-    $('chapterSearch').value = '';
-    renderBooks(current?.book);
-    showDialog('libraryDialog');
-  });
+  $('homeBtn').addEventListener('click', showHome);
+  $('chaptersBtn').addEventListener('click', () => openLibrary());
+  if (window.TextviewHome) window.TextviewHome.actions = {
+    openChapter: id => { void openChapter(id); }, openNAS: showNAS,
+    openBook: openLibrary, openLibrary: showShelf,
+    openImport: () => openImport(), openHelp, showHome, notify: showToast
+  };
+  if (window.TextviewShelf) window.TextviewShelf.actions = {
+    openBook: openLibrary, openImport: () => openImport(), openHelp,
+    showHome, notify: showToast
+  };
+  if (window.TextviewNAS) window.TextviewNAS.actions = { showHome, showShelf, importDownloaded, notify: showToast };
+  if (window.TextviewReaderUI) window.TextviewReaderUI.actions = {
+    back: showShelf, toggleBookmark, openContents: () => openLibrary(current?.book),
+    edit: () => $('editBtn').click(),
+    changeSettings: patch => changeSettings(() => {
+      settings = normalizeSettings({ ...settings, ...patch });
+    }),
+    page: delta => {
+      if (readingActive && !busy && !switching && !suppressPosition) window.TextviewReaderLayout?.page(delta);
+    },
+    layoutWillChange: readerLayoutWillChange, layoutChanged: readerLayoutChanged,
+    notify: showToast
+  };
   $('bookSelect').addEventListener('change', renderChapterList);
   $('chapterSearch').addEventListener('input', renderChapterList);
   $('addToBookBtn').addEventListener('click', () => {
@@ -656,7 +876,7 @@
   $('lineBtn').addEventListener('click', () => { void changeSettings(() => { settings.lineHeight = nextSetting([1.6, 1.8, 1.9, 2.0, 2.2], settings.lineHeight); }); });
   $('paddingBtn').addEventListener('click', () => { void changeSettings(() => { settings.padding = nextSetting([14, 18, 22, 28, 34], settings.padding); }); });
   $('themeBtn').addEventListener('click', () => { void changeSettings(() => { settings.dark = !settings.dark; }); });
-  $('topBtn').addEventListener('click', () => { window.scrollTo(0, 0); savePosition(); updateProgress(); });
+  $('topBtn').addEventListener('click', () => { scrollToRatio(0); savePosition(); updateProgress(); });
   $('helpBtn').addEventListener('click', openHelp);
   $('offlineStatus').addEventListener('click', openHelp);
   $('checkOfflineBtn').addEventListener('click', async () => {
@@ -664,14 +884,6 @@
     $('cacheDetails').textContent = '필수 앱 파일 확인 중…';
     await checkOffline(navigator.onLine);
     $('checkOfflineBtn').disabled = false;
-  });
-  $('persistBtn').addEventListener('click', async () => {
-    try {
-      if (!navigator.storage?.persist) throw new Error('이 환경에서는 저장 공간 보호를 요청할 수 없습니다. 원본 TXT를 보관하세요.');
-      const granted = await navigator.storage.persist();
-      if (granted) $('persistInfo').textContent = '저장 공간 보호가 승인되었습니다. 사용자가 직접 데이터를 지우는 경우에는 보호되지 않습니다.';
-      else $('persistInfo').textContent = '보호 요청이 승인되지 않았습니다. 홈 화면 앱에서 다시 요청하고 원본 TXT를 보관하세요.';
-    } catch (error) { $('persistInfo').textContent = explainError(error); }
   });
   $('exportBtn').addEventListener('click', () => { void makeBackup(); });
   $('restoreBtn').addEventListener('click', () => { $('backupInput').value = ''; $('backupInput').click(); });
@@ -685,13 +897,8 @@
     dialog.querySelector('[data-close]').addEventListener('click', () => dialog.close());
     dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
   });
-  window.addEventListener('scroll', () => {
-    updateProgress();
-    if (current && !switching && !suppressPosition) {
-      clearTimeout(positionTimer);
-      positionTimer = setTimeout(savePosition, 300);
-    }
-  }, { passive: true });
+  window.addEventListener('scroll', readerMoved, { passive: true });
+  window.TextviewReaderLayout?.onChange(readerMoved);
   window.addEventListener('pagehide', savePosition);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') savePosition();
@@ -700,7 +907,7 @@
     // Ignore Safari address-bar height changes; restore only after a width change.
     if (Math.abs(innerWidth - lastWidth) < 2) return;
     lastWidth = innerWidth;
-    if (current && !switching) void changeSettings(() => {});
+    if (readingActive && current && !switching) void changeSettings(() => {});
   });
   window.addEventListener('online', () => { void checkOffline(); });
   window.addEventListener('offline', renderOfflineStatus.bind(null, undefined));
@@ -709,9 +916,14 @@
   async function start() {
     settings = normalizeSettings(readState('settings', DEFAULTS));
     applySettings();
+    showHome();
     try {
       db = await openDatabase();
-      db.onversionchange = () => { db.close(); db = null; setBusy(false); showNotice('앱이 업데이트되었습니다. 앱을 닫았다가 다시 열어 주세요.'); };
+      db.onversionchange = () => {
+        db.close(); db = null;
+        homeError = '앱이 업데이트되었습니다. 앱을 닫았다가 다시 열어 주세요.';
+        setBusy(false); showNotice(homeError);
+      };
       const storedState = await dbRequest('state', 'getAll');
       for (const record of storedState) memoryState.set(record.key, record);
       settings = normalizeSettings(readState('settings', DEFAULTS));
@@ -720,11 +932,20 @@
       setBusy(false);
       let last = readState('last', null);
       if (!chapters.some(chapter => chapter.id === last) && chapters.length) last = [...chapters].sort(compareFiles)[0].id;
-      if (last) await openChapter(last);
+      current = chapters.find(chapter => chapter.id === last) || null;
+      // Editing reloads the page. Consume its one-shot marker to keep that flow.
+      let returnToReader = null;
+      try {
+        returnToReader = sessionStorage.getItem(PREFIX + 'returnToReader');
+        sessionStorage.removeItem(PREFIX + 'returnToReader');
+      } catch { /* Normal launches still show Home when sessionStorage is blocked. */ }
+      if (returnToReader && chapters.some(chapter => chapter.id === returnToReader)) await openChapter(returnToReader);
+      else showHome();
     } catch (error) {
       db = null;
+      homeError = '기기 책장을 열지 못했습니다. ' + explainError(error);
       setBusy(false);
-      showNotice('기기 책장을 열지 못했습니다. ' + explainError(error));
+      showNotice(homeError);
     }
     await setupOffline();
   }
