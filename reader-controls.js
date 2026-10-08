@@ -36,6 +36,7 @@
   let measureFrame = 0;
   let lastPanelHeight = -1;
   let lastBarHeight = -1;
+  let lastFooterHeight = -1;
   let state = { active: false, ready: false, settings: { ...defaults }, page: 1, pageCount: 1 };
   const api = { actions: {}, render, show, hide, openSettings, closeSettings, isSettingsOpen: () => settingsOpen };
   window.TextviewReaderUI = api;
@@ -86,7 +87,6 @@
     stepRow('verticalPadding', '상하여백') +
     choiceRow('wrap', '줄바꿈', [{ value: 'word', label: '단어단위', icon: 'word' }, { value: 'character', label: '글자단위', icon: 'character' }]) +
     choiceRow('viewMode', '넘김방식', [{ value: 'page', label: '페이지뷰', icon: 'horizontal' }, { value: 'scroll', label: '스크롤뷰', icon: 'vertical' }]) +
-    choiceRow('pageEffect', '넘김효과', [{ value: 'none', label: '효과 없음' }, { value: 'slide', label: '슬라이드' }, { value: 'curl', label: '책 넘김' }], 'reader-effect-row') +
     `<div class="reader-settings-tail">
       <div class="reader-theme-choices" role="radiogroup" aria-label="본문 색상">
         <button type="button" role="radio" aria-checked="false" data-reader-choice="dark" data-reader-value="true"><span class="reader-theme-swatch reader-theme-dark" aria-hidden="true"></span><span>다크</span></button>
@@ -188,12 +188,6 @@
       button.disabled = !state.active || !state.ready;
     });
     panel.querySelector('[data-reader-action="edit"]').disabled = !state.active || !state.ready;
-    panel.classList.toggle('reader-scroll-settings', state.settings.viewMode === 'scroll');
-    const effects = panel.querySelector('[aria-labelledby="readerSettingLabel-pageEffect"]');
-    effects.setAttribute('aria-disabled', String(state.settings.viewMode === 'scroll'));
-    effects.querySelectorAll('button').forEach(button => {
-      button.disabled = !state.active || !state.ready || state.settings.viewMode === 'scroll';
-    });
   }
 
   function render(model = {}) {
@@ -244,7 +238,8 @@
     document.body.classList.remove('reader-ui-active');
     document.documentElement.style.setProperty('--reader-settings-height', '0px');
     document.documentElement.style.setProperty('--reader-topbar-height', '0px');
-    lastPanelHeight = lastBarHeight = -1;
+    document.documentElement.style.setProperty('--reader-bottombar-height', '0px');
+    lastPanelHeight = lastBarHeight = lastFooterHeight = -1;
   }
 
   function openSettings() {
@@ -277,17 +272,32 @@
       measureFrame = 0;
       const visible = state.active && document.body.classList.contains('reader-ui-active');
       const panelHeight = visible && settingsOpen ? Math.round(panel.getBoundingClientRect().height) : 0;
-      const barHeight = visible ? Math.round(topbar.getBoundingClientRect().height) : 0;
-      if (panelHeight === lastPanelHeight && barHeight === lastBarHeight) return;
+      const barHeight = visible && (settingsOpen || document.body.classList.contains('show-topbar')) ? Math.round(topbar.getBoundingClientRect().height) : 0;
+      const footerHeight = visible && (settingsOpen || document.body.classList.contains('show-bottombar')) ? Math.round(footer.getBoundingClientRect().height) : 0;
+      if (panelHeight === lastPanelHeight && barHeight === lastBarHeight && footerHeight === lastFooterHeight) return;
       lastPanelHeight = panelHeight;
       lastBarHeight = barHeight;
+      lastFooterHeight = footerHeight;
       document.documentElement.style.setProperty('--reader-settings-height', panelHeight + 'px');
       document.documentElement.style.setProperty('--reader-topbar-height', barHeight + 'px');
+      document.documentElement.style.setProperty('--reader-bottombar-height', footerHeight + 'px');
       runAction('layoutChanged');
     });
   }
 
   if (typeof ResizeObserver === 'function') new ResizeObserver(scheduleMeasure).observe(topbar);
+  let lastBarVisibility = barVisibility();
+  function barVisibility() {
+    return ['show-topbar', 'show-bottombar', 'settingsOpen'].map(name => document.body.classList.contains(name)).join(':');
+  }
+  new MutationObserver(() => {
+    const visibility = barVisibility();
+    if (visibility === lastBarVisibility) return;
+    lastBarVisibility = visibility;
+    if (!state.active) return;
+    runAction('layoutWillChange');
+    scheduleMeasure();
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
   window.addEventListener('resize', scheduleMeasure, { passive: true });
   window.visualViewport?.addEventListener('resize', scheduleMeasure, { passive: true });
   render();

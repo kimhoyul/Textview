@@ -13,17 +13,15 @@
   let pageCount = 1;
   let pageWidth = 0;
   let pageHeight = 0;
+  let stageOffset = 0;
   let reflowFrame = 0;
   let scrollFrame = 0;
   let nativeTarget = null;
   let gesture = null;
-  let animation = null;
-  let animationTimer = 0;
-  let animationToken = 0;
-  let transitioning = false;
   let observersStarted = false;
+  let anchorText = null;
+  let anchorOffset = null;
   const listeners = new Set();
-  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 
   function number(value, min, max, fallback) {
     return typeof value === 'number' && Number.isFinite(value)
@@ -40,7 +38,7 @@
       dark: typeof input.dark === 'boolean' ? input.dark : settings.dark,
       wrap: ['word', 'character'].includes(input.wrap) ? input.wrap : settings.wrap,
       viewMode: ['page', 'scroll'].includes(input.viewMode) ? input.viewMode : settings.viewMode,
-      pageEffect: ['none', 'slide', 'curl'].includes(input.pageEffect) ? input.pageEffect : settings.pageEffect
+      pageEffect: 'none'
     };
   }
   function nativeRatio() {
@@ -57,7 +55,7 @@
       effect: settings.pageEffect, pageEffect: settings.pageEffect,
       settings: { ...settings }, ratio: getRatio(), pageIndex,
       page: pageIndex + 1, pageNumber: pageIndex + 1, pageCount,
-      pageWidth, pageHeight, transitioning,
+      pageWidth, pageHeight, transitioning: false,
       canPrevious: pageIndex > 0, canNext: pageIndex < pageCount - 1
     };
   }
@@ -85,16 +83,16 @@
         display: block; position: fixed; top: var(--tv-page-top, 0px); left: 50%;
         width: min(100%, var(--reader-width, 760px)); height: var(--tv-viewport-height, 100dvh);
         transform: translateX(-50%); margin: 0; overflow: hidden;
-        background: var(--bg); perspective: 1400px; isolation: isolate;
+        background: var(--bg); isolation: isolate;
         touch-action: pan-y pinch-zoom;
       }
       .reader-viewport.reader-page-mode .reader-page-face {
         display: block; position: relative; width: 100%; height: 100%; box-sizing: border-box;
-        padding: var(--tv-vertical-padding, 24px)
+        padding: max(var(--tv-vertical-padding, 24px), var(--tv-safe-top, 0px))
           max(var(--tv-horizontal-padding, 22px), env(safe-area-inset-right))
-          var(--tv-vertical-padding, 24px)
+          max(var(--tv-vertical-padding, 24px), var(--tv-safe-bottom, 0px))
           max(var(--tv-horizontal-padding, 22px), env(safe-area-inset-left));
-        background: var(--bg); backface-visibility: hidden;
+        background: var(--bg);
       }
       .reader-viewport.reader-page-mode .reader-page-clip {
         display: block; position: relative; width: 100%; height: 100%; min-width: 0;
@@ -114,10 +112,6 @@
       }
       .reader-viewport.reader-page-mode[data-wrap="word"] #reader { word-break: keep-all; overflow-wrap: anywhere; }
       .reader-viewport.reader-page-mode[data-wrap="character"] #reader { word-break: break-all; overflow-wrap: anywhere; }
-      @media (prefers-reduced-motion: reduce) {
-        .reader-viewport.reader-page-mode .reader-page-stage,
-        .reader-viewport.reader-page-mode .reader-page-face { animation: none !important; transition: none !important; }
-      }
     `;
     document.head.appendChild(style);
   }
@@ -155,16 +149,58 @@
     viewport.dataset.viewMode = settings.viewMode;
     viewport.dataset.wrap = settings.wrap;
     reader.classList.toggle('reader-page-content', paged);
-    if (!paged) stage.style.removeProperty('transform');
+    if (!paged) {
+      stageOffset = 0;
+      stage.style.removeProperty('transform');
+    }
   }
   function measuredHeight(selector) {
     const element = document.querySelector(selector);
-    if (!element || element.hidden || getComputedStyle(element).display === 'none') return 0;
-    // The bars can be translated off screen. Their reserved height is unchanged.
+    if (!element || element.hidden) return 0;
+    const visibleClass = selector === '.topbar' ? 'show-topbar' : 'show-bottombar';
+    // A visibility transition can remain "visible" while a bar moves off
+    // screen. Use the requested state so text expands on the same toggle.
+    const reading = document.body.classList.contains('reading');
+    if (reading &&
+        !document.body.classList.contains('settingsOpen') &&
+        !document.body.classList.contains(visibleClass)) return 0;
+    const style = getComputedStyle(element);
+    if (style.display === 'none' || (!reading && style.visibility === 'hidden')) return 0;
     return Math.max(0, element.getBoundingClientRect().height);
   }
+  function textNode() {
+    return reader?.firstChild?.nodeType === Node.TEXT_NODE ? reader.firstChild : null;
+  }
+  function characterPage(node, offset) {
+    if (!node?.length || !pageWidth) return 0;
+    const index = Math.min(node.length - 1, Math.max(0, offset));
+    const range = document.createRange();
+    range.setStart(node, index);
+    range.setEnd(node, index + 1);
+    const rect = Array.from(range.getClientRects()).find(item => item.height > 0);
+    if (!rect) return null;
+    // Column rects include the stage's current translation, even outside the clip.
+    const x = rect.left - clip.getBoundingClientRect().left - stageOffset;
+    return Math.max(0, Math.min(pageCount - 1, Math.floor((x + 1) / pageWidth)));
+  }
+  function rememberPageStart() {
+    const node = textNode();
+    anchorText = node;
+    anchorOffset = null;
+    if (!node?.length) return;
+    let low = 0, high = node.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      const column = characterPage(node, mid);
+      if (column === null) return;
+      if (column < pageIndex) low = mid + 1;
+      else high = mid;
+    }
+    anchorOffset = Math.min(low, node.length - 1);
+  }
   function placePage(index) {
-    stage.style.transform = `translateX(${-index * pageWidth}px)`;
+    stageOffset = -index * pageWidth;
+    stage.style.transform = `translateX(${stageOffset}px)`;
   }
   function restoreNative(value) {
     const maximum = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
@@ -172,28 +208,13 @@
     nativeTarget = window.scrollY;
     anchorRatio = value;
   }
-  function cancelEffect() {
-    animationToken++;
-    if (animation) {
-      try { animation.cancel(); } catch { /* An already detached animation is harmless. */ }
-      animation = null;
-    }
-    clearTimeout(animationTimer);
-    animationTimer = 0;
-    transitioning = false;
-    if (face) {
-      face.style.removeProperty('transform');
-      face.style.removeProperty('transform-origin');
-      face.style.removeProperty('box-shadow');
-    }
-  }
-
   function reflow(value) {
     const keep = typeof value === 'number' ? ratio(value) : anchorRatio;
+    const preserveCharacter = active && settings.viewMode === 'page' &&
+      anchorText === textNode() && anchorOffset !== null && Math.abs(keep - anchorRatio) < 1e-8;
     anchorRatio = keep;
     if (reflowFrame) { cancelAnimationFrame(reflowFrame); reflowFrame = 0; }
     if (!ensureElements()) return getState();
-    cancelEffect();
     applyMode();
     if (!active) return getState();
     if (settings.viewMode === 'scroll') {
@@ -201,6 +222,8 @@
       pageIndex = 0;
       pageWidth = 0;
       pageHeight = 0;
+      anchorText = null;
+      anchorOffset = null;
       restoreNative(keep);
     } else {
       const visual = window.visualViewport;
@@ -213,6 +236,8 @@
       const vertical = Math.min(settings.verticalPadding, Math.max(0, (height - settings.fontSize * settings.lineHeight) / 2));
       viewport.style.setProperty('--tv-page-top', `${offsetTop + top}px`);
       viewport.style.setProperty('--tv-viewport-height', `${height}px`);
+      viewport.style.setProperty('--tv-safe-top', top ? '0px' : 'env(safe-area-inset-top)');
+      viewport.style.setProperty('--tv-safe-bottom', bottom ? '0px' : 'env(safe-area-inset-bottom)');
       viewport.style.setProperty('--tv-horizontal-padding', `${settings.padding}px`);
       viewport.style.setProperty('--tv-vertical-padding', `${vertical}px`);
       const contentWidth = Math.max(1, clip.getBoundingClientRect().width);
@@ -224,8 +249,12 @@
       viewport.style.setProperty('--tv-column-gap', `${gap}px`);
       // scrollWidth is the actual multi-column width; the final page has no trailing gap.
       pageCount = Math.max(1, Math.ceil((reader.scrollWidth + gap - 1) / pageWidth));
+      // Read the saved character's new column before moving the stage.
+      const anchoredPage = preserveCharacter ? characterPage(anchorText, anchorOffset) : null;
       pageIndex = Math.min(pageCount - 1, Math.round(keep * (pageCount - 1)));
+      if (anchoredPage !== null) pageIndex = anchoredPage;
       placePage(pageIndex);
+      if (!preserveCharacter || anchoredPage === null) rememberPageStart();
       nativeTarget = 0;
       window.scrollTo(0, 0);
     }
@@ -254,86 +283,40 @@
     gesture = null;
     if (reflowFrame) { cancelAnimationFrame(reflowFrame); reflowFrame = 0; }
     if (scrollFrame) { cancelAnimationFrame(scrollFrame); scrollFrame = 0; }
-    cancelEffect();
     if (ensureElements()) applyMode();
     changed();
     return getState();
   }
   function setRatio(value) {
-    anchorRatio = ratio(value);
+    const nextRatio = ratio(value);
+    const keepCharacter = active && settings.viewMode === 'page' &&
+      anchorText === textNode() && anchorOffset !== null && Math.abs(nextRatio - anchorRatio) < 1e-8;
+    anchorRatio = nextRatio;
     if (!active || !ensureElements()) return getState();
-    cancelEffect();
     if (settings.viewMode === 'page') {
-      pageIndex = Math.min(pageCount - 1, Math.round(anchorRatio * (pageCount - 1)));
-      placePage(pageIndex);
+      // app.js reapplies the same stored ratio after settings reflow. Do not
+      // discard the character we just preserved by remapping that ratio again.
+      if (!keepCharacter) {
+        pageIndex = Math.min(pageCount - 1, Math.round(anchorRatio * (pageCount - 1)));
+        placePage(pageIndex);
+        rememberPageStart();
+      }
     } else restoreNative(anchorRatio);
     // Keep the caller's exact ratio in page mode until the reader turns a page.
     changed();
     return getState();
   }
 
-  function finishEffect(token) {
-    if (token !== animationToken) return;
-    if (animation) {
-      try { animation.cancel(); } catch { /* No layout depends on animation support. */ }
-      animation = null;
-    }
-    clearTimeout(animationTimer);
-    animationTimer = 0;
-    face.style.removeProperty('transform');
-    face.style.removeProperty('transform-origin');
-    face.style.removeProperty('box-shadow');
-    placePage(pageIndex);
-    transitioning = false;
-    changed();
-  }
-  function animatePage(from, to) {
-    const effect = reducedMotion?.matches ? 'none' : settings.pageEffect;
-    if (effect === 'none' || typeof stage.animate !== 'function') { placePage(to); return; }
-    const token = ++animationToken;
-    transitioning = true;
-    animationTimer = setTimeout(() => finishEffect(token), 650);
-    try {
-      if (effect === 'slide') {
-        placePage(to);
-        animation = stage.animate([
-          { transform: `translateX(${-from * pageWidth}px)` },
-          { transform: `translateX(${-to * pageWidth}px)` }
-        ], { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'both' });
-        animation.finished.then(() => finishEffect(token), () => finishEffect(token));
-      } else {
-        const direction = to > from ? -1 : 1;
-        face.style.transformOrigin = direction < 0 ? 'left center' : 'right center';
-        // Rotate only the visible paper face, without cloning the chapter DOM.
-        animation = face.animate([
-          { transform: 'rotateY(0deg)', boxShadow: '0 0 0 rgba(0,0,0,0)' },
-          { transform: `rotateY(${direction * 88}deg)`, boxShadow: `${-direction * 24}px 0 28px rgba(0,0,0,.36)` }
-        ], { duration: 150, easing: 'ease-in', fill: 'forwards' });
-        animation.finished.then(() => {
-          if (token !== animationToken || !active) return;
-          animation.cancel();
-          placePage(to);
-          try {
-            animation = face.animate([
-              { transform: `rotateY(${-direction * 88}deg)`, boxShadow: `${direction * 24}px 0 28px rgba(0,0,0,.36)` },
-              { transform: 'rotateY(0deg)', boxShadow: '0 0 0 rgba(0,0,0,0)' }
-            ], { duration: 190, easing: 'ease-out', fill: 'both' });
-            animation.finished.then(() => finishEffect(token), () => finishEffect(token));
-          } catch { finishEffect(token); }
-        }, () => finishEffect(token));
-      }
-    } catch { finishEffect(token); }
-  }
   function page(delta) {
-    if (!active || settings.viewMode !== 'page' || transitioning || !ensureElements()) return false;
+    if (!active || settings.viewMode !== 'page' || !ensureElements()) return false;
     const step = Number.isFinite(delta) ? Math.trunc(delta) : 0;
     if (!step) return false;
     const next = Math.max(0, Math.min(pageCount - 1, pageIndex + step));
     if (next === pageIndex) return false;
-    const previous = pageIndex;
     pageIndex = next;
     anchorRatio = pageCount > 1 ? pageIndex / (pageCount - 1) : 0;
-    animatePage(previous, next);
+    placePage(next);
+    rememberPageStart();
     changed();
     document.dispatchEvent(new CustomEvent('textview:pagechange', { detail: getState() }));
     return true;
@@ -343,7 +326,7 @@
     return !!target?.closest?.('button, a, input, textarea, select, [contenteditable="true"], dialog[open]');
   }
   function canGesture() {
-    return active && settings.viewMode === 'page' && !transitioning &&
+    return active && settings.viewMode === 'page' &&
       !selectionActive() && !document.querySelector('dialog[open]');
   }
   function touchStart(event) {
@@ -412,14 +395,6 @@
     event.stopPropagation();
     page(delta);
   }, true);
-  reducedMotion?.addEventListener?.('change', () => {
-    if (reducedMotion.matches && transitioning) {
-      cancelEffect();
-      if (active && settings.viewMode === 'page') placePage(pageIndex);
-      changed();
-    }
-  });
-
   window.TextviewReaderLayout = {
     configure, show, hide, getRatio, setRatio, reflow, page, getState,
     onChange(callback) {

@@ -206,9 +206,6 @@ body.reading .reader-edit-button {
 body.reading .reader-setting-choices button svg { flex: 0 0 21px; width: 21px; height: 21px; }
 body.reading .reader-setting-choices .is-selected,
 body.reading .reader-theme-choices .is-selected { color: var(--reader-control-accent); }
-body.reading .reader-effect-row .reader-setting-choices { max-width: 242px; }
-body.reading .reader-effect-row .reader-setting-choices button { font-size: 15px; }
-body.reading .reader-scroll-settings .reader-effect-row { opacity: .48; }
 
 body.reading .reader-settings-tail { min-height: 44px; border-bottom: 0; }
 body.reading .reader-theme-choices { display: flex; align-items: center; gap: 16px; }
@@ -265,7 +262,6 @@ body.reading .reader-page-controls button:disabled { opacity: .35; }
   body.reading .reader-settings-panel { padding-right: max(16px, env(safe-area-inset-right)); padding-left: max(16px, env(safe-area-inset-left)); }
   body.reading .reader-setting-choices { margin-left: 12px; gap: 2px; }
   body.reading .reader-setting-choices button { gap: 4px; font-size: 14px; }
-  body.reading .reader-effect-row .reader-setting-choices button { font-size: 14px; }
   body.reading .reader-setting-label { font-size: 15px; }
 }
 
@@ -285,6 +281,12 @@ body.reading .reader-viewport[data-view-mode="scroll"][data-wrap="character"] #r
 }
 
 body.reading.reader-ui-active:not(.reader-paged) .reader-shell {
-  padding-top: calc(var(--reader-topbar-height, 56px) + var(--reader-vertical-padding, 12px));
-  padding-bottom: calc(52px + env(safe-area-inset-bottom) + var(--reader-vertical-padding, 12px));
+  padding-top: calc(var(--reader-topbar-height, 0px) + var(--reader-vertical-padding, 12px));
+  padding-bottom: calc(var(--reader-bottombar-height, 0px) + var(--reader-vertical-padding, 12px));
+}
+body.reading.reader-ui-active:not(.reader-paged):not(.show-topbar):not(.settingsOpen) .reader-shell {
+  padding-top: max(env(safe-area-inset-top), var(--reader-vertical-padding, 12px));
+}
+body.reading.reader-ui-active:not(.reader-paged):not(.show-bottombar):not(.settingsOpen) .reader-shell {
+  padding-bottom: max(env(safe-area-inset-bottom), var(--reader-vertical-padding, 12px));
 }

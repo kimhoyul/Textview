@@ -6,7 +6,7 @@
   const DB_NAME = PREFIX + 'bookshelf';
   const MAX_FILE_BYTES = 32 * 1024 * 1024;
   const DEFAULTS = { fontSize: 20, lineHeight: 1.9, padding: 12, verticalPadding: 12,
-    dark: true, wrap: 'word', viewMode: 'page', pageEffect: 'curl' };
+    dark: true, wrap: 'word', viewMode: 'page', pageEffect: 'none' };
   const collator = new Intl.Collator('ko', { numeric: true, sensitivity: 'base' });
   const memoryState = new Map();
   let db = null;
@@ -137,7 +137,7 @@
       dark: typeof value.dark === 'boolean' ? value.dark : DEFAULTS.dark,
       wrap: value.wrap === 'character' ? 'character' : 'word',
       viewMode: value.viewMode === 'scroll' ? 'scroll' : 'page',
-      pageEffect: ['none', 'slide', 'curl'].includes(value.pageEffect) ? value.pageEffect : DEFAULTS.pageEffect
+      pageEffect: 'none'
     };
   }
   function formatBytes(bytes) {
