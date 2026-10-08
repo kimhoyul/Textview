@@ -1,7 +1,7 @@
 /* Update VERSION whenever any app-shell file changes. TXT lives in IndexedDB,
    not this cache; an app update must never clear the bookshelf database. */
 'use strict';
-const VERSION = '2.4.0';
+const VERSION = '2.4.2';
 const SCOPE = self.registration.scope;
 const PREFIX = 'offline-txt-shell:' + encodeURIComponent(SCOPE) + ':';
 const CACHE = PREFIX + VERSION;
@@ -9,7 +9,7 @@ const FILES = ['index.html', 'styles.css', 'app.js', 'home.css', 'home-ui.js', '
   'bookshelf.css', 'bookshelf-ui.js',
   'reader.css', 'reader-controls.js', 'reader-layout.js',
   'nas.css', 'nas-ui.js',
-  'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
+  'icons/hoyul-192.png', 'icons/hoyul-512.png', 'icons/hoyul-apple-touch.png'];
 const URLS = FILES.map(path => new URL(path, SCOPE).href);
 const HOME = new URL('index.html', SCOPE).href;
 

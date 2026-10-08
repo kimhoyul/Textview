@@ -220,7 +220,7 @@
     window.TextviewShelf?.hide();
     window.TextviewHome?.show();
     $('themeColor').content = '#111214';
-    document.title = 'TEXTVIEW · 홈';
+    document.title = '호율 시리즈 · 홈';
     window.scrollTo(0, 0);
   }
 
@@ -246,7 +246,7 @@
     window.TextviewHome?.hide();
     window.TextviewShelf?.show();
     $('themeColor').content = '#08090b';
-    document.title = 'TEXTVIEW · 보관함';
+    document.title = '호율 시리즈 · 보관함';
   }
 
   function getRatio() {
@@ -296,7 +296,7 @@
     window.TextviewShelf?.hide();
     renderHome();
     window.TextviewNAS?.show();
-    document.title = 'TEXTVIEW · NAS';
+    document.title = '호율 시리즈 · NAS';
   }
   function renderReaderUI() {
     if (!window.TextviewReaderUI) return;
@@ -370,7 +370,7 @@
       $('empty').hidden = true;
       $('title').textContent = cleanName(meta.name);
       $('subtitle').textContent = meta.book;
-      document.title = cleanName(meta.name) + ' · TXT 책장';
+      document.title = cleanName(meta.name) + ' · 호율 시리즈';
       writeState('last', meta.id);
       writeState('lastBook:' + meta.book, meta.id);
       window.TextviewReaderLayout?.show();
@@ -636,9 +636,9 @@
         $('reader').textContent = '';
         $('reader').hidden = true;
         $('empty').hidden = false;
-        $('title').textContent = '오프라인 TXT 책장';
+        $('title').textContent = '호율 시리즈';
         $('subtitle').textContent = '책장에서 다른 책을 선택하거나 TXT를 추가하세요.';
-        document.title = '오프라인 TXT 책장';
+        document.title = '호율 시리즈';
         lastRatio = 0;
         writeState('last', null);
         window.scrollTo(0, 0);
@@ -670,7 +670,7 @@
       });
       const payload = { format: 'offline-txt-bookshelf', version: 1, exportedAt: new Date().toISOString(),
         settings, last: readState('last', null), chapters: items };
-      const filename = 'TXT-책장-백업-' + new Date().toISOString().slice(0, 10) + '.json';
+      const filename = '호율-시리즈-책장-백업-' + new Date().toISOString().slice(0, 10) + '.json';
       backupFile = new File([JSON.stringify(payload)], filename, { type: 'application/json' });
       if (backupURL) URL.revokeObjectURL(backupURL);
       backupURL = URL.createObjectURL(backupFile);
@@ -890,7 +890,7 @@
   $('backupInput').addEventListener('change', () => { void restoreBackup($('backupInput').files?.[0]); });
   $('shareBackupBtn').addEventListener('click', async () => {
     if (!backupFile) return;
-    try { await navigator.share({ files: [backupFile], title: 'TXT 책장 백업' }); }
+    try { await navigator.share({ files: [backupFile], title: '호율 시리즈 책장 백업' }); }
     catch (error) { if (error.name !== 'AbortError') $('backupStatus').textContent = explainError(error); }
   });
   document.querySelectorAll('dialog').forEach(dialog => {

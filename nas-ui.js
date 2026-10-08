@@ -43,7 +43,7 @@
     <div class="nas-session" hidden><span class="nas-connection-label" id="nasConnectionLabel">연결 안 됨</span></div>
     <div class="nas-message" id="nasMessage" role="status" aria-live="polite" hidden><p id="nasMessageText"></p><button type="button" data-nas-action="shelf" id="nasMessageShelf" hidden>보관함 보기 ${icon('next')}</button></div>
     <section class="nas-login" id="nasLoginView" aria-labelledby="nasLoginTitle">
-      <h2 class="nas-wordmark" id="nasLoginTitle">TEXTVIEW</h2>
+      <h2 class="nas-wordmark" id="nasLoginTitle">호율 시리즈</h2>
       <form id="nasLoginForm" autocomplete="off">
         <div class="nas-credentials">
           <label class="nas-visually-hidden" for="nasUsername">아이디</label><input id="nasUsername" name="username" type="text" placeholder="아이디" maxlength="256" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" required>
@@ -60,7 +60,7 @@
       <div class="nas-approval-panel" id="nasApprovalPanel" role="status" aria-live="polite" hidden><div class="nas-approval-card"><div class="nas-approval-topline"><span class="nas-approval-spinner" aria-hidden="true"></span><span class="nas-approval-status">승인 기다리는 중</span><time class="nas-approval-countdown" id="nasApprovalCountdown" role="timer" aria-live="off">02:00</time></div><p class="nas-approval-instruction">Secure SignIn 앱에서 승인해 주세요.</p><div class="nas-verify-number" id="nasVerifyNumber" hidden><span>승인 화면에서 이 번호를 확인해 주세요.</span><strong id="nasVerifyNumberValue"></strong></div></div><p class="nas-approval-followup">승인하면 자동으로 연결됩니다.</p><button type="button" class="nas-approval-cancel" id="nasApprovalCancel" data-nas-action="approval-cancel">취소</button></div>
       <p class="nas-login-note nas-visually-hidden" id="nasLoginNote">로그인 후 Secure SignIn 앱에서 승인해 주세요.</p>
       <button type="button" class="nas-retry-button" data-nas-action="retry" id="nasRetry" hidden>다시 연결</button>
-      <div class="nas-login-footer" aria-hidden="true">TEXTVIEW</div>
+      <div class="nas-login-footer" aria-hidden="true">호율 시리즈</div>
     </section>
     <section class="nas-browser" id="nasBrowserView" aria-label="NAS 폴더와 TXT 파일" hidden>
       <h2 id="nasFolderTitle" class="nas-visually-hidden">공유 폴더</h2>

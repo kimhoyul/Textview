@@ -15,12 +15,17 @@
   const screen = document.createElement('main');
   screen.id = 'homeScreen';
   screen.className = 'home-screen';
-  screen.setAttribute('aria-label', 'Textview 홈');
+  screen.setAttribute('aria-label', '호율 시리즈 홈');
   screen.hidden = true;
   screen.innerHTML = `
     <header class="home-header">
       <div class="home-toprow">
-        <h1 class="home-logo">TEXTVIEW</h1>
+        <h1 class="home-visually-hidden">호율 시리즈</h1>
+        <div class="home-brand-tabs" role="tablist" aria-label="콘텐츠 종류">
+          <button id="homeNovelTab" type="button" role="tab" class="is-active" aria-selected="true" aria-controls="homeNovelPanel" data-home-action="novel">NOVEL</button>
+          <button id="homeComixTab" type="button" role="tab" aria-selected="false" aria-describedby="homeComixHint" tabindex="-1" data-home-action="comix">COMIX</button>
+        </div>
+        <span id="homeComixHint" class="home-visually-hidden">준비 중</span>
         <div class="home-header-actions">
           <button class="home-icon-button" id="homeSearchToggle" type="button" data-home-action="search" aria-label="내 서재 검색" aria-controls="homeSearchPanel" aria-expanded="false">${svg('search')}</button>
         </div>
@@ -38,7 +43,7 @@
         </div>
       </div>
     </header>
-    <div class="home-content">
+    <div class="home-content" id="homeNovelPanel" role="tabpanel" aria-labelledby="homeNovelTab">
       <section class="home-search-results" id="homeSearchResults" aria-labelledby="homeSearchHeading" hidden>
         <div class="home-section-head"><h2 id="homeSearchHeading">내 서재 검색</h2><span id="homeSearchCount" class="home-search-count" aria-live="polite"></span></div>
         <div id="homeSearchGrid" class="home-book-grid"></div>
@@ -305,6 +310,11 @@
     else if (action === 'nas') runAction('openNAS');
     else if (action === 'search') setSearch(!searchOpen);
     else if (action === 'close-search') setSearch(false);
+    else if (action === 'comix') runAction('notify', 'COMIX는 준비 중입니다.');
+    else if (action === 'novel') {
+      $('homeNovelTab').tabIndex = 0;
+      $('homeComixTab').tabIndex = -1;
+    }
     else if (action === 'home') {
       if (searchOpen) setSearch(false);
       runAction('showHome');
@@ -340,6 +350,14 @@
     recentMode = recentMode === 'recent' ? 'added' : 'recent';
     renderRecent();
     $(recentMode === 'recent' ? 'homeRecentHeading' : 'homeAddedHeading').focus();
+  });
+  screen.querySelector('.home-brand-tabs').addEventListener('keydown', event => {
+    if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const focusComix = event.key === 'End' || (event.key !== 'Home' && event.target.id === 'homeNovelTab');
+    $('homeNovelTab').tabIndex = focusComix ? -1 : 0;
+    $('homeComixTab').tabIndex = focusComix ? 0 : -1;
+    $(focusComix ? 'homeComixTab' : 'homeNovelTab').focus();
   });
   track.addEventListener('scroll', () => {
     if (scrollFrame) return;
