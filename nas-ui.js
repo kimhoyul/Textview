@@ -4,7 +4,6 @@
 
   const DEFAULT_ENDPOINT = 'https://chhc007.synology.me:9444/textview-nas/api.php';
   const MAX_FILE_BYTES = 32 * 1024 * 1024;
-  const MAX_SELECTION = 100;
   const PAGE_LIMIT = 100;
   const paths = {
     back: '<path d="m15 5-7 7 7 7"/>',
@@ -217,10 +216,59 @@
     let payload = null;
     try { payload = await response.json(); } catch (_) { /* A missing gateway may return an HTML page. */ }
     if (payload?.ok === false && typeof payload.error?.code === 'string') {
-      return failure(payload.error.code, typeof payload.error.message === 'string' ? payload.error.message : undefined, safeApprovalDiagnostic(payload.error.diagnostic));
+      const error = failure(payload.error.code, typeof payload.error.message === 'string' ? payload.error.message : undefined, safeApprovalDiagnostic(payload.error.diagnostic));
+      if (error.code === 'RATE_LIMITED') error.retryAfter = retryAfter(response, payload.error.retryAfter);
+      return error;
     }
     const code = response.status === 404 ? 'NOT_INSTALLED' : response.status === 413 ? 'TOO_LARGE' : response.status === 429 ? 'RATE_LIMITED' : response.status === 401 ? 'SESSION_EXPIRED' : response.status === 403 ? 'FORBIDDEN' : 'NAS_UNREACHABLE';
-    return failure(code);
+    const error = failure(code);
+    if (code === 'RATE_LIMITED') error.retryAfter = retryAfter(response);
+    return error;
+  }
+
+  function retryAfter(response, bodyValue) {
+    const header = response.headers.get('Retry-After');
+    const seconds = header && /^\d+$/.test(header.trim()) ? Number(header) : bodyValue;
+    // Existing gateways do not expose Retry-After through CORS; their window is 600 seconds.
+    return Number.isSafeInteger(seconds) && seconds > 0 && seconds <= 86400 ? seconds : 600;
+  }
+
+  function waitForRateLimit(seconds, signal, onWait) {
+    return new Promise((resolve, reject) => {
+      let timer;
+      const deadline = Date.now() + seconds * 1000;
+      const finish = error => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', cancelled);
+        if (error) reject(error); else resolve();
+      };
+      const cancelled = () => finish(failure('CANCELLED'));
+      const tick = () => {
+        if (signal?.aborted) { cancelled(); return; }
+        const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        onWait(remaining);
+        if (!remaining) finish();
+        else timer = setTimeout(tick, Math.min(1000, deadline - Date.now()));
+      };
+      signal?.addEventListener('abort', cancelled, { once: true });
+      tick();
+    });
+  }
+
+  async function fileRequest(action, payload, options = {}) {
+    const generation = sequence;
+    while (true) {
+      if (generation !== sequence || options.signal?.aborted) throw failure('CANCELLED');
+      try { return await request(action, payload, options); }
+      catch (error) {
+        if (error?.code !== 'RATE_LIMITED') throw error;
+        await waitForRateLimit(error.retryAfter || 600, options.signal, remaining => {
+          if (generation !== sequence || options.signal?.aborted) return;
+          if (options.onRetryWait) options.onRetryWait(remaining);
+          else $('nasListLoading').textContent = remaining ? `NAS 요청 대기 중 · ${remaining}초 후 계속` : '폴더를 불러오는 중…';
+        });
+      }
+    }
   }
 
   async function request(action, payload = {}, options = {}) {
@@ -536,23 +584,47 @@
   }
   function eligible(entry) { return !entry.isDir && (!Number.isFinite(Number(entry.size)) || Number(entry.size) <= MAX_FILE_BYTES); }
 
+  function directoryPage(data, path, offset) {
+    if (data.path !== path || !Number.isSafeInteger(data.total) || data.total < 0) throw failure('INVALID_REQUEST');
+    const responseOffset = Number.isSafeInteger(data.offset) && data.offset >= 0 ? data.offset : offset;
+    const cursor = Number.isSafeInteger(data.nextOffset) && data.nextOffset >= 0 ? data.nextOffset : responseOffset + PAGE_LIMIT;
+    if (responseOffset !== offset || (cursor <= offset && cursor < data.total)) {
+      throw failure('INVALID_REQUEST', '폴더 목록을 끝까지 확인하지 못했습니다. 다시 시도해 주세요.');
+    }
+    return { entries: Array.isArray(data.entries) ? data.entries.filter(validEntry) : [], total: data.total, nextOffset: cursor };
+  }
+
+  function sortEntries(values) {
+    return [...values].sort((a, b) => Number(Boolean(b.isDir)) - Number(Boolean(a.isDir)) || collator.compare(a.name, b.name));
+  }
+
+  function cancelListOperation(showMessage = true) {
+    if (busy !== 'select-all' && busy !== 'list') return;
+    const selectingAll = busy === 'select-all';
+    ++sequence;
+    activeController?.abort();
+    activeController = null;
+    busy = '';
+    if (showMessage) message(selectingAll ? '전체 선택을 취소했습니다.' : '폴더 조회를 취소했습니다.');
+    updateView();
+  }
+
   async function loadDirectory(path, append = false) {
+    if (busy === 'select-all' || busy === 'list') cancelListOperation(false);
     if (!visible || !authenticated || busy) return;
     const offset = append ? nextOffset : 0;
     if (!append) selected.clear();
     message();
     const operation = beginOperation('list');
     try {
-      const data = await request('list', { path, offset, limit: PAGE_LIMIT }, { signal: operation.controller.signal });
-      if (operation.generation !== sequence) return;
-      const incoming = Array.isArray(data.entries) ? data.entries.filter(validEntry) : [];
-      const combined = append ? [...entries, ...incoming] : incoming;
-      entries = [...new Map(combined.map(entry => [entry.path, entry])).values()].sort((a, b) => Number(Boolean(b.isDir)) - Number(Boolean(a.isDir)) || collator.compare(a.name, b.name));
-      currentPath = typeof data.path === 'string' && data.path.startsWith('/') ? data.path : path;
-      total = Math.max(0, Number(data.total) || 0);
-      const responseOffset = Math.max(0, Number(data.offset) || offset);
-      nextOffset = Number.isFinite(Number(data.nextOffset)) ? Math.max(responseOffset, Number(data.nextOffset)) : responseOffset + PAGE_LIMIT;
-      if (nextOffset <= offset && nextOffset < total) nextOffset = total;
+      const data = await fileRequest('list', { path, offset, limit: PAGE_LIMIT }, { signal: operation.controller.signal });
+      if (operation.generation !== sequence || operation.controller.signal.aborted) return;
+      const page = directoryPage(data, path, offset);
+      const combined = append ? [...entries, ...page.entries] : page.entries;
+      entries = sortEntries(new Map(combined.map(entry => [entry.path, entry])).values());
+      currentPath = path;
+      total = page.total;
+      nextOffset = page.nextOffset;
       if (!append) {
         searchQuery = '';
         selectionMode = false;
@@ -628,15 +700,46 @@
     if (locationReturnFocus?.isConnected) locationReturnFocus.focus({ preventScroll: true });
     locationReturnFocus = null;
   }
-  function toggleSelectAll(checked) {
+  async function toggleSelectAll(checked) {
     if (busy) return;
     const available = filteredEntries().filter(eligible);
-    if (!checked) available.forEach(entry => selected.delete(entry.path));
-    else {
-      available.forEach(entry => { if (selected.size < MAX_SELECTION || selected.has(entry.path)) selected.set(entry.path, entry); });
-      if (available.some(entry => !selected.has(entry.path))) message('한 번에 100개 파일까지 선택할 수 있습니다.');
+    if (!checked) {
+      available.forEach(entry => selected.delete(entry.path));
+      updateControls();
+      return;
     }
-    updateControls();
+    if (nextOffset >= total) {
+      available.forEach(entry => selected.set(entry.path, entry));
+      updateControls();
+      return;
+    }
+    if (!visible || !authenticated) return;
+    const path = currentPath;
+    const query = searchQuery.trim().toLocaleLowerCase();
+    const candidates = new Map(entries.map(entry => [entry.path, entry]));
+    let cursor = nextOffset;
+    let directoryTotal = total;
+    message();
+    const operation = beginOperation('select-all');
+    try {
+      while (cursor < directoryTotal) {
+        $('nasListLoading').textContent = `전체 선택 목록 확인 중 · ${cursor} / ${directoryTotal}`;
+        const data = await fileRequest('list', { path, offset: cursor, limit: PAGE_LIMIT }, { signal: operation.controller.signal });
+        if (operation.generation !== sequence || operation.controller.signal.aborted || !visible || !authenticated || currentPath !== path) return;
+        const page = directoryPage(data, path, cursor);
+        page.entries.forEach(entry => candidates.set(entry.path, entry));
+        cursor = page.nextOffset;
+        directoryTotal = page.total;
+      }
+      // Keep the original selection until every page succeeds; cancellation is atomic.
+      entries = sortEntries(candidates.values());
+      total = directoryTotal;
+      nextOffset = cursor;
+      entries.filter(entry => eligible(entry) && (!query || entry.name.toLocaleLowerCase().includes(query)))
+        .forEach(entry => selected.set(entry.path, entry));
+      renderDirectory();
+    } catch (error) { if (operation.generation === sequence) handleError(error); }
+    finally { finishOperation(operation); }
   }
   function stopApprovalCountdown() {
     if (approvalCountdownTimer) { clearInterval(approvalCountdownTimer); approvalCountdownTimer = 0; }
@@ -698,6 +801,8 @@
 
   function updateControls() {
     const locked = !!busy;
+    const selectingAll = busy === 'select-all';
+    const entryByPath = new Map(entries.map(entry => [entry.path, entry]));
     $('nasLoginButton').disabled = locked;
     $('nasLoginButton').textContent = busy === 'login' ? '로그인 중…' : busy === 'connect' ? '연결 중…' : busy === 'approval-cancel' ? '요청 종료 중…' : '로그인';
     ['nasUsername', 'nasPassword', 'nasOtp', 'nasOtpToggle', 'nasRetry'].forEach(id => { $(id).disabled = locked; });
@@ -709,7 +814,7 @@
       button.tabIndex = checked ? -1 : 0;
     });
     $('nasApprovalCancel').disabled = !approvalPending;
-    $('nasLogout').disabled = locked;
+    $('nasLogout').disabled = locked && !selectingAll;
     $('nasBookName').disabled = locked;
     $('nasDownloadButton').disabled = !ready || !authenticated || locked || !selected.size || !$('nasBookName').value.trim();
     $('nasDownloadButton').querySelector('span').textContent = busy === 'download' ? '가져오는 중…' : '내 서재에 추가';
@@ -721,36 +826,38 @@
     screen.querySelector('.nas-location-backdrop').disabled = locked;
     $('nasLocationLabel').textContent = currentPath === '/' ? 'NAS' : basename(currentPath);
     $('nasBackButton').disabled = busy === 'download';
-    $('nasSelectModeToggle').disabled = locked || !entries.some(eligible);
+    $('nasSelectModeToggle').disabled = locked || (!entries.some(eligible) && nextOffset >= total);
     $('nasSelectionDone').disabled = locked;
     $('nasImportClose').disabled = locked;
     screen.querySelector('.nas-sheet-backdrop').disabled = locked;
-    $('nasSearchInput').disabled = busy === 'download';
+    $('nasSearchInput').disabled = busy === 'download' || selectingAll;
     $('nasSearchClear').hidden = !searchQuery;
-    $('nasSearchClear').disabled = busy === 'download';
+    $('nasSearchClear').disabled = busy === 'download' || selectingAll;
     $('nasTitle').textContent = selectionMode ? `${selected.size}개의 항목` : currentPath === '/' ? 'NAS' : basename(currentPath);
-    screen.querySelectorAll('[data-nas-path], [data-nas-action="refresh"], [data-nas-action="up"], [data-nas-action="more"]').forEach(button => { button.disabled = locked; });
+    screen.querySelectorAll('[data-nas-path], [data-nas-action="refresh"], [data-nas-action="up"]').forEach(button => { button.disabled = locked && !selectingAll; });
+    $('nasMore').disabled = locked;
     screen.querySelectorAll('[data-nas-action="select-file"]').forEach(button => {
-      const entry = entries.find(item => item.path === button.dataset.nasFilePath);
+      const entry = entryByPath.get(button.dataset.nasFilePath);
       button.disabled = locked || !eligible(entry || { isDir: true });
     });
     screen.querySelectorAll('[data-nas-file]').forEach(input => {
-      const entry = entries.find(item => item.path === input.dataset.nasFile);
+      const entry = entryByPath.get(input.dataset.nasFile);
       input.disabled = locked || !eligible(entry || { isDir: true });
       input.checked = selected.has(input.dataset.nasFile);
       input.closest('.nas-file-row').classList.toggle('is-selected', input.checked);
     });
     const available = filteredEntries().filter(eligible);
     const selectedVisible = available.filter(entry => selected.has(entry.path)).length;
-    $('nasSelectAll').checked = !!available.length && selectedVisible === available.length;
-    $('nasSelectAll').indeterminate = selectedVisible > 0 && selectedVisible < available.length;
+    $('nasSelectAll').checked = !!available.length && selectedVisible === available.length && nextOffset >= total;
+    $('nasSelectAll').indeterminate = selectedVisible > 0 && (selectedVisible < available.length || nextOffset < total);
     $('nasSelectAll').disabled = locked;
-    $('nasHeaderSelectAll').disabled = locked || !available.length;
-    $('nasHeaderSelectAll').textContent = available.length && selectedVisible === available.length ? '선택 해제' : '전체 선택';
+    $('nasHeaderSelectAll').disabled = !selectingAll && (locked || (!available.length && nextOffset >= total));
+    $('nasHeaderSelectAll').textContent = selectingAll ? '선택 취소' : $('nasSelectAll').checked ? '선택 해제' : '전체 선택';
     $('nasMore').textContent = busy === 'list' ? '불러오는 중…' : '더 보기';
-    $('nasEmpty').hidden = !!filteredEntries().length || busy === 'list';
-    $('nasBrowserView').setAttribute('aria-busy', String(busy === 'list'));
-    $('nasListLoading').hidden = busy !== 'list';
+    $('nasEmpty').hidden = !!filteredEntries().length || busy === 'list' || selectingAll;
+    $('nasBrowserView').setAttribute('aria-busy', String(busy === 'list' || selectingAll));
+    $('nasListLoading').hidden = busy !== 'list' && !selectingAll;
+    if (!selectingAll) $('nasListLoading').textContent = '폴더를 불러오는 중…';
     $('nasCancel').disabled = importInProgress;
     $('nasImportDock').hidden = !authenticated || !selected.size || importSheetOpen;
     $('nasLocationDock').hidden = !authenticated || !!selected.size || importSheetOpen || locationMenuOpen;
@@ -833,9 +940,10 @@
         $('nasTransferStatus').textContent = `다운로드 중 · ${index + 1} / ${files.length}`;
         $('nasTransferFilename').textContent = entry.name;
         updateControls();
-        const data = await request('download', { path: entry.path }, {
+        const data = await fileRequest('download', { path: entry.path }, {
           signal: controller.signal, binary: true,
           onProgress: bytes => { $('nasDownloadProgress').value = index + Math.min(.94, Number(entry.size) > 0 ? bytes / Number(entry.size) * .94 : 0); },
+          onRetryWait: remaining => { $('nasTransferStatus').textContent = remaining ? `NAS 요청 대기 중 · ${remaining}초 후 계속` : `다운로드 중 · ${index + 1} / ${files.length}`; },
         });
         if (controller.signal.aborted) throw failure('CANCELLED');
         const file = new File([data.buffer], filenameFromHeader(data.filename, entry.name), { type: 'text/plain' });
@@ -844,9 +952,14 @@
         updateControls();
         const imported = await api.actions.importDownloaded([file], bookName);
         if (!imported || typeof imported !== 'object') throw failure('INVALID_REQUEST', '서재에 추가한 결과를 확인하지 못했습니다.');
-        result.added += resultCount(imported.added);
-        result.skipped += resultCount(imported.skipped);
-        result.failed += resultCount(imported.failed);
+        const added = resultCount(imported.added), skipped = resultCount(imported.skipped), failed = resultCount(imported.failed);
+        result.added += added;
+        result.skipped += skipped;
+        result.failed += failed;
+        if (failed || (!added && !skipped)) {
+          if (!failed) result.failed++;
+          throw failure('INVALID_REQUEST', '서재에 저장하지 못했습니다. 선택한 파일을 유지했습니다.');
+        }
         completed++;
         selected.delete(entry.path);
         $('nasDownloadProgress').value = index + 1;
@@ -870,6 +983,7 @@
   }
 
   async function logout() {
+    if (busy === 'select-all') cancelListOperation(false);
     if (busy) return;
     const operation = beginOperation('logout');
     const pending = sessionToken && csrfToken ? request('logout', {}, { signal: operation.controller.signal }) : Promise.resolve();
@@ -947,15 +1061,14 @@
   $('nasLoginForm').addEventListener('submit', login);
   $('nasOtp').addEventListener('input', event => { event.target.value = event.target.value.replace(/[^0-9]/g, '').slice(0, 6); });
   $('nasBookName').addEventListener('input', updateControls);
-  $('nasSearchInput').addEventListener('input', event => { searchQuery = event.target.value; renderDirectory(); });
-  $('nasSelectAll').addEventListener('change', event => toggleSelectAll(event.target.checked));
+  $('nasSearchInput').addEventListener('input', event => { if (busy === 'select-all') cancelListOperation(false); searchQuery = event.target.value; renderDirectory(); });
+  $('nasSelectAll').addEventListener('change', event => { void toggleSelectAll(event.target.checked); });
   screen.addEventListener('change', event => {
     const input = event.target.closest('[data-nas-file]');
     if (!input || busy) return;
     const entry = entries.find(item => item.path === input.dataset.nasFile);
     if (!entry || !eligible(entry)) return;
-    if (input.checked && selected.size >= MAX_SELECTION) { input.checked = false; message('한 번에 100개 파일까지 선택할 수 있습니다.'); }
-    else if (input.checked) selected.set(entry.path, entry);
+    if (input.checked) selected.set(entry.path, entry);
     else selected.delete(entry.path);
     updateControls();
   });
@@ -977,11 +1090,10 @@
       case 'select-file': {
         const entry = entries.find(item => item.path === button.dataset.nasFilePath);
         if (busy || !entry || !eligible(entry)) break;
-        if (!selected.has(entry.path) && selected.size >= MAX_SELECTION) { message('한 번에 100개 파일까지 선택할 수 있습니다.'); break; }
         selectionMode = true; selected.set(entry.path, entry); renderDirectory(); updateView(); break;
       }
       case 'selection-done': if (!busy) { selectionMode = false; renderDirectory(); updateView(); } break;
-      case 'select-all': toggleSelectAll(!$('nasSelectAll').checked); break;
+      case 'select-all': if (busy === 'select-all') cancelListOperation(); else void toggleSelectAll(!$('nasSelectAll').checked); break;
       case 'clear-search': searchQuery = ''; $('nasSearchInput').value = ''; renderDirectory(); $('nasSearchInput').focus(); break;
       case 'open-import': openImportSheet(); break;
       case 'close-import': closeImportSheet(); break;
@@ -1000,6 +1112,7 @@
     screen.querySelector('[data-nas-auth-mode]:not([hidden])')?.focus();
   });
   screen.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && (busy === 'select-all' || busy === 'list')) { cancelListOperation(); event.preventDefault(); return; }
     if (event.key === 'Escape' && !busy) {
       if (locationMenuOpen) closeLocationMenu();
       else if (importSheetOpen) closeImportSheet();
