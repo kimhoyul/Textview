@@ -201,6 +201,7 @@
     if (/^\d+$/.test(title)) title += '화';
     $('readerChapterTitle').textContent = title;
     $('readerChapterTitle').title = title;
+    command.querySelector('[data-reader-action="back"]').setAttribute('aria-label', state.backLabel || '보관함으로 돌아가기');
     command.querySelectorAll('[data-reader-action]').forEach(button => {
       button.disabled = !state.active || !state.ready;
     });

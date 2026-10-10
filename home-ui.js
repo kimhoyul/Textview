@@ -151,7 +151,7 @@
     card.disabled = !state.ready;
     card.dataset.homeAction = 'book';
     card.dataset.bookIndex = String(state.books.indexOf(book));
-    card.setAttribute('aria-label', `${book.name}, ${book.count}화, 목차 열기`);
+    card.setAttribute('aria-label', `${book.name}, ${book.count}화, 작품 상세 열기`);
     const cover = makeElement('span', 'home-book-cover');
     addArt(cover, book);
     cover.setAttribute('aria-hidden', 'true');

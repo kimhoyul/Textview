@@ -1,0 +1,155 @@
+/* A work's cover and episodes, using the same library data as the reader. */
+body.detail-visible {
+  --bg: #111214;
+  --panel: #222224;
+  --text: #f4f4f6;
+  --muted: #a2a2ab;
+  --border: rgba(255,255,255,.1);
+  --accent: #c5acee;
+  color-scheme: dark;
+  background: #111214;
+  color: #f4f4f6;
+  overflow-y: auto;
+}
+
+body.detail-visible > .topbar,
+body.detail-visible > .reader-shell,
+body.detail-visible > .bottombar,
+body.detail-visible > #showControls,
+body.detail-visible > #homeScreen,
+body.detail-visible > #bookshelfScreen,
+body.detail-visible > #nasScreen { display: none !important; }
+
+html:has(body.detail-visible) { scrollbar-width: none; }
+html:has(body.detail-visible)::-webkit-scrollbar { display: none; }
+
+.book-detail-screen {
+  --detail-bg: #111214;
+  --detail-panel: #222224;
+  --detail-line: #303033;
+  --detail-text: #f4f4f6;
+  --detail-muted: #a2a2ab;
+  --detail-lavender: #c5acee;
+  --detail-header-height: 56px;
+  width: 100%;
+  max-width: 780px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 0 max(0px, env(safe-area-inset-right)) calc(96px + env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left));
+  background: var(--detail-bg);
+  color: var(--detail-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+  letter-spacing: -.025em;
+  -webkit-font-smoothing: antialiased;
+}
+.book-detail-screen[hidden], .book-detail-screen [hidden] { display: none !important; }
+.book-detail-screen *, .book-detail-screen *::before, .book-detail-screen *::after { box-sizing: border-box; }
+.book-detail-screen h1, .book-detail-screen h2, .book-detail-screen h3, .book-detail-screen p { margin: 0; }
+.book-detail-screen button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  touch-action: manipulation;
+}
+.book-detail-screen button:active { transform: none; opacity: .76; }
+.book-detail-screen button:disabled { opacity: .42; cursor: default; }
+.book-detail-screen button:focus-visible, .book-detail-screen input:focus-visible { outline: 2px solid var(--detail-lavender); outline-offset: -3px; }
+.book-detail-screen svg { width: 24px; height: 24px; flex-shrink: 0; vertical-align: middle; }
+.detail-visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px !important; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+.detail-header { position: sticky; top: 0; z-index: 45; padding-top: env(safe-area-inset-top); background: #08090b; border-bottom: 1px solid rgba(255,255,255,.06); }
+.detail-toprow { min-height: 56px; display: flex; align-items: center; gap: 4px; padding: 0 8px; }
+.book-detail-screen .detail-icon-button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; width: 44px; height: 44px; flex: 0 0 44px; }
+.detail-heading { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; line-height: 1.35; font-weight: 650; outline: none; }
+.detail-search-panel { padding: 0 18px 12px; }
+.detail-search-field { display: flex; align-items: center; min-height: 44px; gap: 7px; padding: 0 0 0 12px; border: 1px solid #3d3d43; border-radius: 5px; background: #222224; }
+.detail-search-field > svg { width: 19px; height: 19px; color: var(--detail-muted); }
+.detail-search-field input { flex: 1; min-width: 0; width: 100%; min-height: 44px; padding: 8px 0; border: 0; border-radius: 0; background: transparent; color: var(--detail-text); font: inherit; font-size: 14px; outline-offset: 3px; }
+.detail-search-field input::placeholder { color: #92929d; }
+.detail-search-field input::-webkit-search-cancel-button { display: none; }
+.detail-search-field .detail-icon-button { width: 40px; min-width: 40px; flex-basis: 40px; }
+.detail-search-field .detail-icon-button svg { width: 18px; height: 18px; }
+
+.detail-intro { display: flex; align-items: flex-start; gap: 17px; padding: 24px 20px 25px; }
+.detail-cover { position: relative; flex: 0 0 100px; width: 100px; height: 140px; overflow: hidden; background: #36313f url('./assets/home-art.png') no-repeat; background-size: 200% 200%; border-radius: 2px; isolation: isolate; }
+.detail-art-0 { background-position: 0 0; }
+.detail-art-1 { background-position: 100% 0; }
+.detail-art-2 { background-position: 0 100%; }
+.detail-art-3 { background-position: 100% 100%; }
+.detail-cover::after { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(0deg, rgba(5,7,12,.82), rgba(5,7,12,.05) 80%); }
+.detail-cover-title { position: absolute; right: 8px; bottom: 13px; left: 8px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: #fff; font-family: Georgia, "Apple SD Gothic Neo", serif; font-size: 13px; line-height: 1.42; font-weight: 700; text-align: center; word-break: keep-all; overflow-wrap: anywhere; text-shadow: 0 1px 4px #05070c; }
+.detail-intro-copy { flex: 1; min-width: 0; padding-top: 1px; }
+.detail-book-name { font-size: 21px; font-weight: 750; line-height: 1.4; letter-spacing: -.04em; word-break: keep-all; overflow-wrap: anywhere; }
+.detail-book-kind { margin-top: 9px !important; color: var(--detail-muted); font-size: 12px; line-height: 1.4; letter-spacing: .02em; }
+.detail-book-count { margin-top: 7px !important; color: var(--detail-lavender); font-size: 13px; line-height: 1.4; font-weight: 600; }
+.detail-book-meta { margin-top: 12px !important; color: #95959f; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.detail-read-summary { margin-top: 8px !important; color: #c3c3cb; font-size: 12px; line-height: 1.55; }
+.detail-read-summary strong { color: var(--detail-text); font-weight: 550; }
+
+.detail-tabs { position: sticky; top: var(--detail-header-height); z-index: 40; display: grid; grid-template-columns: 1fr 1fr; padding: 0 20px; border-top: 1px solid #29292d; border-bottom: 1px solid #303034; background: var(--detail-bg); }
+.book-detail-screen .detail-tab { position: relative; min-height: 51px; color: #92929c; font-size: 15px; font-weight: 550; }
+.book-detail-screen .detail-tab.is-active { color: var(--detail-text); font-weight: 750; }
+.detail-tab.is-active::after { content: ""; position: absolute; right: calc(50% - 20px); bottom: -1px; left: calc(50% - 20px); height: 3px; background: var(--detail-lavender); }
+.detail-episodes-panel { background: var(--detail-panel); }
+.detail-list-tools { min-height: 55px; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 0 20px; border-bottom: 1px solid #303034; }
+.detail-count { min-width: 0; font-size: 13px; font-weight: 600; color: #d3d3d9; }
+.detail-count span { color: var(--detail-lavender); font-weight: 700; }
+.book-detail-screen .detail-sort-button { display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 86px; color: #adadb6; font-size: 12px; }
+.detail-sort-button svg { width: 16px; height: 16px; }
+.book-detail-screen .detail-last-read { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 8px 20px; border-bottom: 1px solid #36313e; background: #29252f; color: var(--detail-lavender); text-align: left; font-size: 12px; }
+.detail-last-read > svg { width: 17px; height: 17px; }
+.detail-last-read-label { white-space: nowrap; flex-shrink: 0; font-weight: 650; }
+.detail-last-read-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #d5c9e7; }
+.detail-last-read .detail-last-read-next { width: 15px; height: 15px; margin-left: auto; }
+.detail-episode-list { margin: 0; padding: 0 20px; list-style: none; }
+.detail-episode-list > li { border-bottom: 1px solid #323236; scroll-margin-top: calc(var(--detail-header-height) + 65px); }
+.detail-episode-list > li:last-child { border-bottom: 0; }
+.book-detail-screen .detail-episode { display: flex; align-items: center; gap: 13px; width: 100%; min-height: 92px; padding: 14px 0; text-align: left; }
+.detail-episode-cover { flex: 0 0 42px; width: 42px; height: 59px; border-radius: 1px; }
+.detail-episode-cover .detail-cover-title { right: 3px; bottom: 6px; left: 3px; font-size: 7px; line-height: 1.5; -webkit-line-clamp: 3; }
+.detail-episode-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.detail-episode-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 14px; font-weight: 550; line-height: 1.42; overflow-wrap: anywhere; }
+.detail-episode-number { margin-right: 5px; font-variant-numeric: tabular-nums; }
+.detail-episode-meta { font-size: 11px; line-height: 1.4; color: #92929d; font-variant-numeric: tabular-nums; }
+.detail-episode-state { flex: 0 0 45px; min-width: 45px; align-self: center; text-align: right; font-size: 11px; line-height: 1.6; color: #adadb6; white-space: nowrap; }
+.detail-episode-state strong { display: block; font-weight: 550; color: var(--detail-lavender); }
+.detail-episode.is-current .detail-episode-title { color: #e1d4f5; }
+.detail-episode.is-read .detail-episode-title { color: #b5b5bf; }
+.detail-episode.is-current.is-read .detail-episode-title { color: #e1d4f5; }
+.detail-episode-progress { display: block; width: 35px; height: 2px; margin: 5px 0 0 auto; overflow: hidden; background: #49404f; }
+.detail-episode-progress-fill { display: block; height: 100%; background: var(--detail-lavender); }
+.detail-empty { padding: 48px 24px 60px; text-align: center; }
+.detail-empty p:first-child { font-size: 15px; font-weight: 600; line-height: 1.5; }
+.detail-empty p + p { margin-top: 8px !important; color: var(--detail-muted); font-size: 13px; line-height: 1.5; }
+.detail-info-panel { padding: 25px 20px 40px; background: var(--detail-panel); }
+.detail-info-panel h2 { margin-bottom: 20px; font-size: 16px; font-weight: 650; }
+.detail-info-list { margin: 0; }
+.detail-info-item { display: flex; gap: 18px; padding: 14px 0; border-bottom: 1px solid #323236; font-size: 13px; line-height: 1.5; }
+.detail-info-item:first-child { padding-top: 0; }
+.detail-info-item:last-child { border-bottom: 0; }
+.detail-info-item dt { flex: 0 0 74px; color: #9696a1; }
+.detail-info-item dd { flex: 1; min-width: 0; margin: 0; color: #d6d6dd; overflow-wrap: anywhere; }
+
+.detail-footer { position: fixed; right: 0; bottom: 0; left: 0; z-index: 50; width: 100%; max-width: 780px; margin: 0 auto; padding: 10px max(16px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); border-top: 1px solid #353039; background: #111214; }
+.detail-footer-inner { display: flex; align-items: stretch; gap: 8px; }
+.book-detail-screen .detail-jump-button { display: flex; align-items: center; justify-content: center; flex: 0 0 48px; width: 48px; min-height: 57px; border: 1px solid #4b4158; border-radius: 3px; color: var(--detail-lavender); }
+.detail-jump-button svg { width: 25px; height: 25px; }
+.book-detail-screen .detail-continue-button { display: flex; flex: 1; min-width: 0; min-height: 57px; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 8px 14px; border-radius: 3px; background: var(--detail-lavender); color: #231b2d; }
+.detail-continue-label { font-size: 16px; font-weight: 750; line-height: 1.25; }
+.detail-continue-chapter { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 1.35; color: #4a3b5f; }
+
+@media (max-width: 340px) {
+  .detail-intro { gap: 14px; padding-right: 16px; padding-left: 16px; }
+  .detail-intro > .detail-cover { flex-basis: 87px; width: 87px; height: 123px; }
+  .detail-book-name { font-size: 19px; }
+  .detail-episode-list, .detail-list-tools, .detail-last-read { padding-right: 16px !important; padding-left: 16px !important; }
+  .detail-episode { gap: 10px !important; }
+  .detail-episode-state { flex-basis: 37px; min-width: 37px; }
+  .detail-episode-title { font-size: 13px; }
+}

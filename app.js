@@ -15,6 +15,10 @@
   let readingActive = false;
   let shelfActive = false;
   let nasActive = false;
+  let detailActive = false;
+  let detailBookName = null;
+  let detailReturn = 'home';
+  let readerBackTarget = 'shelf';
   let homeError = '';
   let settings = { ...DEFAULTS };
   let busy = false;
@@ -175,35 +179,51 @@
     renderHome();
   }
 
-  // Home shares the existing chapter metadata and state, without a second library.
-  function renderHome() {
-    if (!window.TextviewHome && !window.TextviewShelf) return;
+  // Each screen reads the same existing chapter metadata and reading state.
+  function bookModel(name) {
+    const list = inBook(name);
+    if (!list.length) return null;
     const globalLast = readState('last', null);
-    const books = [...new Set(chapters.map(chapter => chapter.book))].map(name => {
-      const list = inBook(name);
-      const savedId = readState('lastBook:' + name, null);
-      const isLastBook = list.some(chapter => chapter.id === globalLast);
-      const saved = list.find(chapter => chapter.id === globalLast) || list.find(chapter => chapter.id === savedId);
-      const chapter = saved || list[0];
-      return {
-        name, count: list.length,
-        bytes: list.reduce((sum, item) => sum + item.bytes, 0),
-        addedAt: list.reduce((latest, item) => Math.max(latest, item.addedAt || 0), 0),
-        lastReadAt: saved ? memoryState.get(isLastBook ? 'last' : 'lastBook:' + name)?.updatedAt || 0 : 0,
-        chapterId: chapter.id, chapterName: cleanName(chapter.name),
-        ratio: ratioOf(chapter.id), hasRead: !!saved
-      };
+    const savedId = readState('lastBook:' + name, null);
+    const isLastBook = list.some(chapter => chapter.id === globalLast);
+    const saved = list.find(chapter => chapter.id === globalLast) || list.find(chapter => chapter.id === savedId);
+    const chapter = saved || list[0];
+    const ratio = ratioOf(chapter.id);
+    return {
+      name, count: list.length,
+      bytes: list.reduce((sum, item) => sum + item.bytes, 0),
+      addedAt: list.reduce((latest, item) => Math.max(latest, item.addedAt || 0), 0),
+      lastReadAt: saved ? memoryState.get(isLastBook ? 'last' : 'lastBook:' + name)?.updatedAt || 0 : 0,
+      chapterId: chapter.id, chapterName: cleanName(chapter.name), ratio, hasRead: !!saved,
+      progressRatio: (list.findIndex(item => item.id === chapter.id) + ratio) / list.length,
+      artIndex: window.TextviewHome?.getArtIndex(name) || 0
+    };
+  }
+
+  function renderBookDetail() {
+    if (!window.TextviewBookDetail || !detailBookName) return;
+    const book = bookModel(detailBookName);
+    window.TextviewBookDetail.render({ book,
+      chapters: inBook(detailBookName).map(chapter => ({
+        id: chapter.id, name: chapter.name, title: cleanName(chapter.name),
+        bytes: chapter.bytes, encoding: chapter.encoding, addedAt: chapter.addedAt,
+        ratio: ratioOf(chapter.id),
+        hasRead: !!readState('position:' + chapter.id, null) || (book?.hasRead && chapter.id === book.chapterId),
+        bookmarked: !!readState('bookmark:' + chapter.id, null)
+      })),
+      ready: !!db && !busy && !switching,
+      error: book ? '' : '작품을 찾지 못했습니다.'
     });
+  }
+
+  function renderHome() {
+    const books = [...new Set(chapters.map(chapter => chapter.book))].map(bookModel).filter(Boolean);
     books.sort((a, b) => b.addedAt - a.addedAt || collator.compare(a.name, b.name));
-    for (const book of books) {
-      const list = inBook(book.name);
-      book.progressRatio = (list.findIndex(chapter => chapter.id === book.chapterId) + book.ratio) / list.length;
-      book.artIndex = window.TextviewHome?.getArtIndex(book.name) || 0;
-    }
     const data = { books, lastId: readState('last', null), ready: !!db && !busy, error: homeError };
     window.TextviewHome?.render(data);
     window.TextviewShelf?.render(data);
     window.TextviewNAS?.render({ ready: !!db && !busy, error: homeError });
+    renderBookDetail();
   }
 
   function showHome() {
@@ -212,6 +232,10 @@
     readingActive = false;
     shelfActive = false;
     nasActive = false;
+    detailActive = false;
+    detailBookName = null;
+    readerBackTarget = 'shelf';
+    window.TextviewBookDetail?.hide();
     window.TextviewNAS?.hide();
     window.TextviewReaderUI?.hide();
     window.TextviewReaderLayout?.hide();
@@ -232,12 +256,48 @@
     showDialog('libraryDialog');
   }
 
+  function showBookDetail(book, fromReader = false) {
+    if (busy || switching || suppressPosition || !db || !window.TextviewBookDetail) return;
+    if (!inBook(book).length) { showToast('작품을 찾지 못했습니다.'); return; }
+    savePosition();
+    if (!fromReader && !detailActive) detailReturn = shelfActive ? 'shelf' : 'home';
+    detailBookName = book;
+    detailActive = true;
+    readingActive = false;
+    shelfActive = false;
+    nasActive = false;
+    window.TextviewNAS?.hide();
+    window.TextviewReaderUI?.hide();
+    window.TextviewReaderLayout?.hide();
+    $('reader').hidden = true;
+    window.TextviewHome?.hide();
+    window.TextviewShelf?.hide();
+    renderBookDetail();
+    window.TextviewBookDetail.show();
+    $('themeColor').content = '#111214';
+    document.title = book + ' · 호율 시리즈';
+  }
+
+  function backFromBookDetail() {
+    if (detailReturn === 'shelf') showShelf();
+    else showHome();
+  }
+
+  function backFromReader() {
+    if (readerBackTarget === 'detail' && current) showBookDetail(current.book, true);
+    else showShelf();
+  }
+
   function showShelf() {
     if (busy || switching || suppressPosition || !db) return;
     savePosition();
     readingActive = false;
     shelfActive = true;
     nasActive = false;
+    detailActive = false;
+    detailBookName = null;
+    readerBackTarget = 'shelf';
+    window.TextviewBookDetail?.hide();
     window.TextviewNAS?.hide();
     window.TextviewReaderUI?.hide();
     window.TextviewReaderLayout?.hide();
@@ -289,6 +349,10 @@
     readingActive = false;
     shelfActive = false;
     nasActive = true;
+    detailActive = false;
+    detailBookName = null;
+    readerBackTarget = 'shelf';
+    window.TextviewBookDetail?.hide();
     window.TextviewReaderUI?.hide();
     window.TextviewReaderLayout?.hide();
     $('reader').hidden = true;
@@ -304,6 +368,7 @@
     const index = list.findIndex(chapter => chapter.id === current?.id);
     const layout = window.TextviewReaderLayout?.getState() || {};
     window.TextviewReaderUI.render({ active: readingActive && !!current,
+      backLabel: readerBackTarget === 'detail' ? '작품 상세로 돌아가기' : '보관함으로 돌아가기',
       ready: !!db && !busy && !switching && !suppressPosition && !layout.transitioning, settings,
       chapterName: current ? cleanName(current.name) : '', bookName: current?.book || '',
       bookmarked: !!(current && readState('bookmark:' + current.id, null)),
@@ -358,9 +423,13 @@
       const content = await dbRequest('texts', 'get', id);
       if (!content || typeof content.text !== 'string') throw new Error('이 TXT의 본문을 찾지 못했습니다. 원본 파일을 다시 가져와 주세요.');
       current = meta;
+      if (detailActive) readerBackTarget = 'detail';
+      else if (!readingActive) readerBackTarget = 'shelf';
       readingActive = true;
       shelfActive = false;
       nasActive = false;
+      detailActive = false;
+      window.TextviewBookDetail?.hide();
       window.TextviewNAS?.hide();
       window.TextviewHome?.hide();
       window.TextviewShelf?.hide();
@@ -399,6 +468,7 @@
     if (index < 0) $('chapterProgress').textContent = '- / -';
     else $('chapterProgress').textContent = (index + 1) + ' / ' + list.length;
     renderReaderUI();
+    renderBookDetail();
   }
   async function goChapter(offset) {
     if (!current || busy || switching) return;
@@ -843,7 +913,7 @@
   $('chaptersBtn').addEventListener('click', () => openLibrary());
   if (window.TextviewHome) window.TextviewHome.actions = {
     openChapter: id => { void openChapter(id); }, openNAS: showNAS,
-    openBook: openLibrary, openLibrary: showShelf,
+    openBook: showBookDetail, openLibrary: showShelf,
     openImport: () => openImport(), openHelp, showHome, notify: showToast
   };
   if (window.TextviewShelf) window.TextviewShelf.actions = {
@@ -851,8 +921,11 @@
     showHome, notify: showToast
   };
   if (window.TextviewNAS) window.TextviewNAS.actions = { showHome, showShelf, importDownloaded, notify: showToast };
+  if (window.TextviewBookDetail) window.TextviewBookDetail.actions = {
+    back: backFromBookDetail, openChapter, notify: showToast
+  };
   if (window.TextviewReaderUI) window.TextviewReaderUI.actions = {
-    back: showShelf, toggleBookmark, openContents: () => openLibrary(current?.book),
+    back: backFromReader, toggleBookmark, openContents: () => openLibrary(current?.book),
     edit: () => $('editBtn').click(),
     changeSettings: patch => changeSettings(() => {
       settings = normalizeSettings({ ...settings, ...patch });
