@@ -27,6 +27,8 @@
   let coverSearchRequest = 0;
   let coverSearch = { query: '', results: [], loading: false, error: '' };
   const coverURLs = new Map();
+  const coverMetadataAttempts = new Set();
+  let coverMetadataUpdating = false;
   let homeError = '';
   let settings = { ...DEFAULTS };
   let busy = false;
@@ -192,6 +194,65 @@
     return value?.blob instanceof Blob ? value : null;
   }
 
+  function coverCredits(value) {
+    const clean = text => typeof text === 'string' ? text.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 300) : '';
+    return { author: clean(Array.isArray(value?.author) ? value.author.filter(item => typeof item === 'string').join(', ') : value?.author),
+      sourceName: clean(value?.sourceName) };
+  }
+
+  // Older cover records did not retain search metadata. Only exact titles with
+  // one consistent author/source can safely supply it without a new selection.
+  function matchingCoverCredits(book, results) {
+    const titleKey = title => String(title || '').normalize('NFC').replace(/\[(?:독점|완결|연재)\]/g, '').replace(/\s+/g, '').toLocaleLowerCase('ko');
+    const matches = results.filter(item => titleKey(item.title) === titleKey(book));
+    if (!matches.length) return null;
+    const credits = matches.map(coverCredits);
+    const first = credits[0];
+    return first.author && first.sourceName && credits.every(item => item.author === first.author && item.sourceName === first.sourceName) ? first : null;
+  }
+
+  async function updateLegacyCoverMetadata(books) {
+    if (coverMetadataUpdating || busy || !db || !navigator.onLine || !window.TextviewCoverSearch?.lookup) return;
+    coverMetadataUpdating = true;
+    try {
+      const sorted = [...books].sort((a, b) => b.lastReadAt - a.lastReadAt);
+      for (const book of sorted) {
+        if (!db || busy || !navigator.onLine) break;
+        const original = memoryState.get('cover:' + book.name);
+        const value = original?.value;
+        if (!(value?.blob instanceof Blob) || Object.hasOwn(value, 'author') || Object.hasOwn(value, 'sourceName') || coverMetadataAttempts.has(book.name)) continue;
+        coverMetadataAttempts.add(book.name);
+        try {
+          const credits = matchingCoverCredits(book.name, await window.TextviewCoverSearch.lookup(book.name));
+          if (!credits || !db || memoryState.get(original.key) !== original) continue;
+          const record = { ...original, value: { ...value, ...credits } };
+          // A user's newer image selection always takes precedence.
+          const saved = await new Promise((resolve, reject) => {
+            const tx = db.transaction('state', 'readwrite');
+            const store = tx.objectStore('state');
+            const request = store.get(original.key);
+            let written = false;
+            request.onsuccess = () => {
+              const existing = request.result;
+              if (existing?.updatedAt === original.updatedAt && existing.value?.blob instanceof Blob &&
+                  !Object.hasOwn(existing.value, 'author') && !Object.hasOwn(existing.value, 'sourceName')) {
+                store.put(record); written = true;
+              }
+            };
+            tx.oncomplete = () => resolve(written);
+            tx.onabort = () => reject(tx.error || new Error('작품 정보를 저장하지 못했습니다.'));
+            tx.onerror = () => {};
+          });
+          if (saved && memoryState.get(original.key) === original) {
+            memoryState.set(original.key, record);
+            if (coverBookName === book.name && coverDraft && !coverDraft.changed) Object.assign(coverDraft, credits);
+            renderHome();
+          }
+        } catch { coverMetadataAttempts.delete(book.name); /* The next online session can retry. */ }
+      }
+    } finally { coverMetadataUpdating = false; }
+  }
+
   function coverURL(book) {
     const blob = storedCover(book)?.blob;
     const previous = coverURLs.get(book);
@@ -235,7 +296,7 @@
     coverBookName = book;
     coverActive = true;
     const saved = storedCover(book);
-    coverDraft = { url: coverURL(book), custom: !!saved, changed: false, ownedURL: false };
+    coverDraft = { url: coverURL(book), custom: !!saved, changed: false, ownedURL: false, ...coverCredits(saved) };
     coverSearch = { query: book, results: [], loading: false, error: '' };
     readingActive = false;
     shelfActive = false;
@@ -287,7 +348,7 @@
     renderCoverPicker();
   }
 
-  async function selectCoverFile(file, resultId = '') {
+  async function selectCoverFile(file, resultId = '', searchResult = null) {
     if (!coverActive || coverProcessing || busy || !db) return;
     const token = ++coverRequest;
     coverProcessing = true;
@@ -298,7 +359,7 @@
       if (!coverActive || token !== coverRequest) return;
       releaseCoverDraft();
       coverDraft = { ...value, url: URL.createObjectURL(value.blob), custom: true,
-        changed: true, ownedURL: true, resultId };
+        changed: true, ownedURL: true, resultId, ...coverCredits(searchResult) };
       window.TextviewCoverPicker.setStatus('');
     } catch (error) {
       if (token === coverRequest) window.TextviewCoverPicker.setStatus(explainError(error), true);
@@ -325,13 +386,13 @@
       coverProcessing = false;
       renderCoverPicker();
     }
-    if (file && coverActive && token === coverRequest) await selectCoverFile(file, id);
+    if (file && coverActive && token === coverRequest) await selectCoverFile(file, id, result);
   }
 
   function useDefaultCover() {
     if (!coverActive || coverProcessing) return;
     releaseCoverDraft();
-    coverDraft = { url: '', custom: false, changed: !!storedCover(coverBookName), ownedURL: false };
+    coverDraft = { url: '', custom: false, changed: !!storedCover(coverBookName), ownedURL: false, author: '', sourceName: '' };
     window.TextviewCoverPicker.setStatus('');
     renderCoverPicker();
   }
@@ -346,7 +407,7 @@
     try {
       if (coverDraft.custom) {
         const record = { key, value: { blob: coverDraft.blob, width: coverDraft.width,
-          height: coverDraft.height, fileName: coverDraft.fileName }, updatedAt: Date.now() };
+          height: coverDraft.height, fileName: coverDraft.fileName, ...coverCredits(coverDraft) }, updatedAt: Date.now() };
         await dbRequest('state', 'put', record);
         memoryState.set(key, record);
       } else {
@@ -383,7 +444,7 @@
       chapterId: chapter.id, chapterName: cleanName(chapter.name), ratio, hasRead: !!saved,
       progressRatio: (list.findIndex(item => item.id === chapter.id) + ratio) / list.length,
       artIndex: window.TextviewHome?.getArtIndex(name) || 0,
-      coverUrl: coverURL(name), hasCustomCover: !!storedCover(name)
+      coverUrl: coverURL(name), hasCustomCover: !!storedCover(name), ...coverCredits(storedCover(name))
     };
   }
 
@@ -412,6 +473,7 @@
     window.TextviewNAS?.render({ ready: !!db && !busy, error: homeError });
     renderBookDetail();
     renderCoverPicker();
+    void updateLegacyCoverMetadata(books);
   }
 
   function showHome() {
@@ -938,7 +1000,11 @@
       const covers = [];
       for (const book of new Set(chapters.map(chapter => chapter.book))) {
         const cover = storedCover(book);
-        if (cover) covers.push({ book, image: await window.TextviewCoverImage.serialize(cover) });
+        if (cover) {
+          const item = { book, image: await window.TextviewCoverImage.serialize(cover) };
+          if (Object.hasOwn(cover, 'author') || Object.hasOwn(cover, 'sourceName')) Object.assign(item, coverCredits(cover));
+          covers.push(item);
+        }
       }
       if (covers.length) payload.covers = covers;
       const filename = '호율-시리즈-책장-백업-' + new Date().toISOString().slice(0, 10) + '.json';
@@ -978,7 +1044,12 @@
           if (!item || typeof item.book !== 'string' || !item.book.trim() || item.book.length > 100) throw new Error('백업의 표지 작품명이 올바르지 않습니다.');
           const book = item.book.trim().normalize('NFC');
           if (!validBooks.has(book) || restoredCovers.has(book)) throw new Error('백업의 표지 작품명이 올바르지 않습니다.');
-          restoredCovers.set(book, await window.TextviewCoverImage.restore(item.image));
+          for (const field of ['author', 'sourceName']) {
+            if (item[field] !== undefined && (typeof item[field] !== 'string' || item[field].length > 300 || /[\u0000-\u001f\u007f]/.test(item[field]))) throw new Error('백업의 작품 정보가 올바르지 않습니다.');
+          }
+          const value = await window.TextviewCoverImage.restore(item.image);
+          if (item.author !== undefined || item.sourceName !== undefined) Object.assign(value, coverCredits(item));
+          restoredCovers.set(book, value);
         }
       }
       const wasEmpty = chapters.length === 0;
@@ -1210,7 +1281,7 @@
     lastWidth = innerWidth;
     if (readingActive && current && !switching) void changeSettings(() => {});
   });
-  window.addEventListener('online', () => { void checkOffline(); });
+  window.addEventListener('online', () => { void checkOffline(); renderHome(); });
   window.addEventListener('offline', renderOfflineStatus.bind(null, undefined));
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 

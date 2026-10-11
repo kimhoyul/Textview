@@ -89,6 +89,7 @@ html:has(body.detail-visible)::-webkit-scrollbar { display: none; }
 .detail-cover-title { position: absolute; right: 8px; bottom: 13px; left: 8px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: #fff; font-family: Georgia, "Apple SD Gothic Neo", serif; font-size: 13px; line-height: 1.42; font-weight: 700; text-align: center; word-break: keep-all; overflow-wrap: anywhere; text-shadow: 0 1px 4px #05070c; }
 .detail-intro-copy { flex: 1; min-width: 0; padding-top: 1px; }
 .detail-book-name { font-size: 21px; font-weight: 750; line-height: 1.4; letter-spacing: -.04em; word-break: keep-all; overflow-wrap: anywhere; }
+.detail-book-credits { margin-top: 7px !important; color: #b4adbf; font-size: 12px; line-height: 1.6; word-break: keep-all; overflow-wrap: anywhere; }
 .detail-book-kind { margin-top: 9px !important; color: var(--detail-muted); font-size: 12px; line-height: 1.4; letter-spacing: .02em; }
 .detail-book-count { margin-top: 7px !important; color: var(--detail-lavender); font-size: 13px; line-height: 1.4; font-weight: 600; }
 .detail-book-meta { margin-top: 12px !important; color: #95959f; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }

@@ -124,6 +124,13 @@
     return megabytes.toFixed(2).replace(/\.00$/, '') + 'MB';
   }
 
+  function bookCredit(book) {
+    return [book.author, book.sourceName]
+      .filter(value => typeof value === 'string' && value.trim())
+      .map(value => value.trim())
+      .join(' · ');
+  }
+
   function filteredBooks() {
     const query = searchQuery.trim().toLocaleLowerCase();
     return state.books.filter(book =>
@@ -144,7 +151,8 @@
     row.dataset.shelfAction = 'book';
     row.dataset.bookIndex = String(state.books.indexOf(book));
     row.disabled = !state.ready;
-    row.setAttribute('aria-label', `${book.name}, 총 ${book.count}화, ${formatSize(book.bytes)}, 표지 선택`);
+    const credit = bookCredit(book);
+    row.setAttribute('aria-label', `${book.name}${credit ? ', ' + credit : ''}, 총 ${book.count}화, ${formatSize(book.bytes)}, 표지 선택`);
     const cover = element('span', 'bookshelf-cover bookshelf-art-' + artIndex(book));
     cover.setAttribute('aria-hidden', 'true');
     cover.appendChild(element('span', 'bookshelf-cover-title', book.name));
@@ -153,7 +161,9 @@
       cover.style.backgroundImage = 'url(' + JSON.stringify(book.coverUrl) + ')';
     }
     const copy = element('span', 'bookshelf-book-copy');
-    copy.append(element('span', 'bookshelf-book-name', book.name), element('span', 'bookshelf-book-count', `총 ${book.count}화`));
+    copy.appendChild(element('span', 'bookshelf-book-name', book.name));
+    if (credit) copy.appendChild(element('span', 'bookshelf-book-credit', credit));
+    copy.appendChild(element('span', 'bookshelf-book-count', `총 ${book.count}화`));
     const right = element('span', 'bookshelf-book-right');
     right.appendChild(element('span', 'bookshelf-book-size', formatSize(book.bytes)));
     right.insertAdjacentHTML('beforeend', icon('next'));

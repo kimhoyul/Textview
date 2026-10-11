@@ -149,18 +149,36 @@
     return Number.isFinite(time) ? time : 0;
   }
 
+  function bookCredit(book) {
+    return [book.author, book.sourceName]
+      .filter(value => typeof value === 'string' && value.trim())
+      .map(value => value.trim())
+      .join(' · ');
+  }
+
   function createCard(book, compact = false) {
     const card = makeElement('button', 'home-book-card' + (compact ? ' home-book-card-compact' : ''));
     card.type = 'button';
     card.disabled = !state.ready;
     card.dataset.homeAction = 'book';
     card.dataset.bookIndex = String(state.books.indexOf(book));
-    card.setAttribute('aria-label', `${book.name}, ${book.count}화, 작품 상세 열기`);
+    const credit = bookCredit(book);
+    card.setAttribute('aria-label', `${book.name}${credit ? ', ' + credit : ''}, ${book.count}화, 작품 상세 열기`);
     const cover = makeElement('span', 'home-book-cover');
     addArt(cover, book);
     cover.setAttribute('aria-hidden', 'true');
     cover.appendChild(makeElement('span', 'home-cover-title', book.name));
     card.append(cover, makeElement('span', 'home-book-name', book.name));
+    if (credit) {
+      const info = makeElement('span', 'home-book-credit');
+      if (typeof book.author === 'string' && book.author.trim()) {
+        info.appendChild(makeElement('span', 'home-book-author', book.author.trim()));
+      }
+      if (typeof book.sourceName === 'string' && book.sourceName.trim()) {
+        info.appendChild(makeElement('span', 'home-book-source', book.sourceName.trim()));
+      }
+      card.appendChild(info);
+    }
     if (!compact) {
       card.appendChild(makeElement('span', 'home-book-meta', `${book.count}화`));
     }
@@ -181,6 +199,8 @@
     const content = makeElement('div', 'home-hero-copy');
     content.appendChild(makeElement('p', 'home-hero-eyebrow', book.hasRead ? '이어서 읽기' : '보관함에서 읽기'));
     content.appendChild(makeElement('h2', 'home-hero-title', book.name));
+    const credit = bookCredit(book);
+    if (credit) content.appendChild(makeElement('p', 'home-hero-credit', credit));
     const chapter = book.chapterName || `${book.count}화`;
     content.appendChild(makeElement('p', 'home-hero-chapter', chapter));
     const button = makeElement('button', 'home-primary-button', book.hasRead ? '이어 읽기' : '읽기 시작');

@@ -4,8 +4,8 @@
   const UPDATE_MESSAGE = '국내 작품 표지를 검색하려면 NAS 연결 파일을 업데이트해 주세요.';
   const cache = new Map();
   let endpoint = '';
-  let session = null;
-  let bootstrap = null;
+  const mainContext = { session: null, bootstrap: null };
+  const metadataContext = { session: null, bootstrap: null };
   let health = null;
   let nextLibraryRequest = 0;
   let libraryQueue = Promise.resolve();
@@ -18,7 +18,9 @@
     const selected = window.TextviewNAS?.getGatewayEndpoint?.() || window.TextviewNAS?.getEndpoint?.() || DEFAULT_ENDPOINT;
     if (selected !== endpoint) {
       endpoint = selected;
-      session = bootstrap = health = null;
+      mainContext.session = mainContext.bootstrap = null;
+      metadataContext.session = metadataContext.bootstrap = null;
+      health = null;
       cache.clear();
     }
     return endpoint;
@@ -40,19 +42,19 @@
     return health.available;
   }
 
-  async function gateway(action, payload = {}, image = false, retry = true) {
+  async function gateway(action, payload = {}, image = false, retry = true, context = mainContext) {
     const url = getEndpoint();
-    if (action !== 'bootstrap' && !session) {
-      if (!bootstrap) bootstrap = gateway('bootstrap', {}, false).then(data => {
+    if (action !== 'bootstrap' && !context.session) {
+      if (!context.bootstrap) context.bootstrap = gateway('bootstrap', {}, false, true, context).then(data => {
         if (typeof data.sessionToken !== 'string' || !/^[A-Za-z0-9,-]{22,128}$/.test(data.sessionToken) || typeof data.csrfToken !== 'string' || !/^[a-f0-9]{64}$/.test(data.csrfToken)) throw new Error(UPDATE_MESSAGE);
-        session = { token: data.sessionToken, csrf: data.csrfToken };
-      }).finally(() => { bootstrap = null; });
-      await bootstrap;
+        context.session = { token: data.sessionToken, csrf: data.csrfToken };
+      }).finally(() => { context.bootstrap = null; });
+      await context.bootstrap;
     }
     const headers = { 'Content-Type': 'application/json' };
     if (action !== 'bootstrap') {
-      headers.Authorization = 'Bearer ' + session.token;
-      headers['X-CSRF-Token'] = session.csrf;
+      headers.Authorization = 'Bearer ' + context.session.token;
+      headers['X-CSRF-Token'] = context.session.csrf;
     }
     const response = await fetchTimed(url, { method: 'POST', headers, body: JSON.stringify({ action, ...payload }) });
     if (image && response.ok) {
@@ -64,12 +66,12 @@
     try { data = await response.json(); } catch { throw new Error(UPDATE_MESSAGE); }
     if (!response.ok || data.ok !== true) {
       if (data.error?.code === 'SESSION_EXPIRED' && retry && action !== 'bootstrap') {
-        session = null;
-        clearSeriesCache();
+        context.session = null;
+        if (context === mainContext) clearSeriesCache();
         if (image) throw new Error('표지 선택 시간이 지났습니다. 다시 검색해 주세요.');
-        return gateway(action, payload, image, false);
+        return gateway(action, payload, image, false, context);
       }
-      if (data.error?.code === 'COVER_TOKEN_EXPIRED') clearSeriesCache();
+      if (data.error?.code === 'COVER_TOKEN_EXPIRED' && context === mainContext) clearSeriesCache();
       throw new Error(typeof data.error?.message === 'string' ? data.error.message : UPDATE_MESSAGE);
     }
     return data;
@@ -94,10 +96,15 @@
     return pending;
   }
 
-  async function search(query) {
+  function normalizeQuery(query) {
     if (typeof query !== 'string') throw new Error('작품 이름을 입력해 주세요.');
     query = query.trim().normalize('NFC');
     if (!query || [...query].length > 100 || /[\u0000-\u001f\u007f]/.test(query)) throw new Error('작품 이름을 100자 이내로 입력해 주세요.');
+    return query;
+  }
+
+  async function search(query) {
+    query = normalizeQuery(query);
     const key = getEndpoint() + '\n' + query;
     const saved = cache.get(key);
     if (saved && saved.time > Date.now() - 60000) return saved.results;
@@ -122,6 +129,33 @@
     return results;
   }
 
+  // Background attribution has a separate anonymous gateway session. Its
+  // searches must not replace the tokens belonging to an open cover picker.
+  async function lookup(query) {
+    query = normalizeQuery(query);
+    const available = await supportsSeries();
+    let results = [];
+    let primaryError = null;
+    const metadata = rows => rows.filter(item => item && typeof item.title === 'string').map(item => ({
+      title: item.title,
+      author: Array.isArray(item.author) ? item.author.filter(name => typeof name === 'string').join(', ') : typeof item.author === 'string' ? item.author : '',
+      sourceName: typeof item.sourceName === 'string' ? item.sourceName : ''
+    })).filter(item => item.title.trim());
+    if (available) {
+      try {
+        const data = await gateway('cover_search', { query }, false, true, metadataContext);
+        if (!Array.isArray(data.results)) throw new Error(UPDATE_MESSAGE);
+        results = metadata(data.results);
+      } catch (error) { primaryError = error; }
+    }
+    if (!results.length) {
+      try { results = metadata(await searchLibrary(query)); }
+      catch (error) { throw primaryError || new Error(!available ? UPDATE_MESSAGE : error.message); }
+    }
+    if (!results.length && (!available || primaryError)) throw primaryError || new Error(UPDATE_MESSAGE);
+    return results;
+  }
+
   async function getImage(result) {
     if (result?.provider === 'series' && result.endpoint === getEndpoint() && /^[a-f0-9]{48}$/.test(result.token || '')) return gateway('cover_download', { token: result.token }, true);
     const match = /^openlibrary:([0-9]{1,15})$/.exec(result?.id || '');
@@ -132,5 +166,5 @@
     return new File([blob], '표지-' + match[1] + '.jpg', { type: blob.type });
   }
 
-  window.TextviewCoverSearch = { search, getImage };
+  window.TextviewCoverSearch = { search, getImage, lookup };
 })();

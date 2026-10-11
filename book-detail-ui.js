@@ -36,6 +36,7 @@
       <div class="detail-cover" id="bookDetailCover" aria-hidden="true"><span class="detail-cover-title" id="bookDetailCoverTitle"></span></div>
       <div class="detail-intro-copy">
         <h2 class="detail-book-name" id="bookDetailName"></h2>
+        <p class="detail-book-credits" id="bookDetailCredits" hidden></p>
         <p class="detail-book-kind">NOVEL · TXT</p>
         <p class="detail-book-count" id="bookDetailTotal"></p>
         <p class="detail-book-meta" id="bookDetailMeta"></p>
@@ -101,6 +102,10 @@
   }
 
   function safeRatio(value) { return Math.min(1, Math.max(0, Number(value) || 0)); }
+  function metadataText(value) {
+    if (Array.isArray(value)) return value.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean).join(', ');
+    return typeof value === 'string' ? value.trim() : '';
+  }
   function sameId(a, b) { return a != null && b != null && String(a) === String(b); }
   function chapterTitle(chapter) { return String(chapter?.title || chapter?.name || '제목 없는 회차'); }
   function timestamp(value) {
@@ -163,6 +168,9 @@
     screen.setAttribute('aria-label', name + ' 작품 상세');
     $('bookDetailHeading').textContent = name;
     $('bookDetailName').textContent = name;
+    const credits = $('bookDetailCredits');
+    credits.textContent = [metadataText(book?.author), metadataText(book?.sourceName)].filter(Boolean).join(' · ');
+    credits.hidden = !credits.textContent;
     setCover($('bookDetailCover'), book);
     const count = state.chapters.length || Math.max(0, Number(book?.count) || 0);
     $('bookDetailTotal').textContent = `총 ${count.toLocaleString('ko-KR')}화`;
@@ -281,6 +289,8 @@
     const list = $('bookDetailInfoList');
     const data = [
       ['작품명', state.book?.name || ''],
+      ['작가', metadataText(state.book?.author)],
+      ['출처', metadataText(state.book?.sourceName)],
       ['회차', `총 ${state.chapters.length.toLocaleString('ko-KR')}화`],
       ['파일 용량', formatSize(state.book?.bytes)],
       ['최근 추가일', dateLabel(state.book?.addedAt, true)],

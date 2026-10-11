@@ -32,6 +32,7 @@
         </span>
       </button>
       <h2 id="coverPickerBookName" class="cover-picker-book-name"></h2>
+      <p id="coverPickerBookCredits" class="cover-picker-book-credits" hidden></p>
       <p id="coverPickerBookCount" class="cover-picker-book-count"></p>
       <p id="coverPickerStatus" class="cover-picker-status" role="status" aria-live="polite"></p>
       <form id="coverPickerSearchForm" class="cover-picker-search-form" role="search">
@@ -73,7 +74,7 @@
 
   const $ = id => document.getElementById(id);
   let state = { book: null, ready: false, busy: false, error: '' };
-  let draft = { url: '', custom: false, changed: false, fileName: '', resultId: null };
+  let draft = { url: '', custom: false, changed: false, fileName: '', resultId: null, author: '', sourceName: '' };
   let searchState = { query: '', results: [], loading: false, error: '', searched: false };
   let previousFocus = null;
   let previousThemeColor = null;
@@ -97,6 +98,11 @@
     }
   }
 
+  function metadataText(value) {
+    if (Array.isArray(value)) return value.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean).join(', ');
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
   function render(data = {}) {
     const previousName = state.book?.name;
     state = { ...state, ...data };
@@ -110,6 +116,8 @@
         changed: false,
         fileName: '',
         resultId: null,
+        author: metadataText(state.book?.author),
+        sourceName: metadataText(state.book?.sourceName),
       };
       $('coverPickerFile').value = '';
       setStatus('');
@@ -220,6 +228,9 @@
   }
 
   function updatePreview() {
+    const credits = $('coverPickerBookCredits');
+    credits.textContent = [metadataText(draft.author), metadataText(draft.sourceName)].filter(Boolean).join(' · ');
+    credits.hidden = !credits.textContent;
     const hasImage = draft.custom && Boolean(draft.url);
     const image = $('coverPickerImage');
     image.hidden = !hasImage;
