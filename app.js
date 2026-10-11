@@ -19,6 +19,14 @@
   let detailBookName = null;
   let detailReturn = 'home';
   let readerBackTarget = 'shelf';
+  let coverActive = false;
+  let coverBookName = null;
+  let coverDraft = null;
+  let coverProcessing = false;
+  let coverRequest = 0;
+  let coverSearchRequest = 0;
+  let coverSearch = { query: '', results: [], loading: false, error: '' };
+  const coverURLs = new Map();
   let homeError = '';
   let settings = { ...DEFAULTS };
   let busy = false;
@@ -179,6 +187,184 @@
     renderHome();
   }
 
+  function storedCover(book) {
+    const value = memoryState.get('cover:' + book)?.value;
+    return value?.blob instanceof Blob ? value : null;
+  }
+
+  function coverURL(book) {
+    const blob = storedCover(book)?.blob;
+    const previous = coverURLs.get(book);
+    if (previous && previous.blob === blob) return previous.url;
+    if (previous) {
+      coverURLs.delete(book);
+      requestAnimationFrame(() => URL.revokeObjectURL(previous.url));
+    }
+    if (!blob) return '';
+    const url = URL.createObjectURL(blob);
+    coverURLs.set(book, { blob, url });
+    return url;
+  }
+
+  function releaseCoverDraft() {
+    if (coverDraft?.ownedURL) URL.revokeObjectURL(coverDraft.url);
+    coverDraft = null;
+  }
+
+  function hideCoverPicker() {
+    coverRequest++;
+    coverSearchRequest++;
+    window.TextviewCoverPicker?.hide();
+    releaseCoverDraft();
+    coverActive = false;
+    coverBookName = null;
+  }
+
+  function renderCoverPicker() {
+    if (!coverBookName || !window.TextviewCoverPicker) return;
+    window.TextviewCoverPicker.render({ book: bookModel(coverBookName),
+      ready: !!db && !busy && !switching, busy: coverProcessing });
+    if (coverDraft) window.TextviewCoverPicker.setDraft(coverDraft);
+    window.TextviewCoverPicker.setSearch?.(coverSearch);
+  }
+
+  function showCoverPicker(book) {
+    if (busy || switching || suppressPosition || coverProcessing || !db || !window.TextviewCoverPicker || !inBook(book).length) return;
+    savePosition();
+    hideCoverPicker();
+    coverBookName = book;
+    coverActive = true;
+    const saved = storedCover(book);
+    coverDraft = { url: coverURL(book), custom: !!saved, changed: false, ownedURL: false };
+    coverSearch = { query: book, results: [], loading: false, error: '' };
+    readingActive = false;
+    shelfActive = false;
+    nasActive = false;
+    detailActive = false;
+    detailBookName = null;
+    readerBackTarget = 'shelf';
+    window.TextviewNAS?.hide();
+    window.TextviewReaderUI?.hide();
+    window.TextviewReaderLayout?.hide();
+    $('reader').hidden = true;
+    window.TextviewHome?.hide();
+    window.TextviewShelf?.hide();
+    window.TextviewBookDetail?.hide();
+    renderCoverPicker();
+    window.TextviewCoverPicker.setStatus('');
+    window.TextviewCoverPicker.show();
+    $('themeColor').content = '#111214';
+    document.title = book + ' · 표지 선택';
+    void searchCovers(book);
+  }
+
+  async function searchCovers(query) {
+    if (!coverActive || coverProcessing) return;
+    window.TextviewCoverPicker.setStatus('');
+    const term = String(query || '').trim().slice(0, 120);
+    const token = ++coverSearchRequest;
+    if (!navigator.onLine) {
+      coverSearch = { query: term, results: [], loading: false, error: '인터넷 연결 후 표지를 검색해 주세요.' };
+      renderCoverPicker();
+      return;
+    }
+    if (!term) {
+      coverSearch = { query: term, results: [], loading: false, error: '작품 제목을 입력해 주세요.' };
+      renderCoverPicker();
+      return;
+    }
+    coverSearch = { query: term, results: [], loading: true, error: '' };
+    renderCoverPicker();
+    try {
+      if (!window.TextviewCoverSearch) throw new Error('표지 검색을 불러오지 못했습니다. 앱을 다시 열어 주세요.');
+      const results = await window.TextviewCoverSearch.search(term);
+      if (!coverActive || token !== coverSearchRequest) return;
+      coverSearch = { query: term, results, loading: false, error: '' };
+    } catch (error) {
+      if (!coverActive || token !== coverSearchRequest) return;
+      coverSearch = { query: term, results: [], loading: false, error: explainError(error) };
+    }
+    renderCoverPicker();
+  }
+
+  async function selectCoverFile(file, resultId = '') {
+    if (!coverActive || coverProcessing || busy || !db) return;
+    const token = ++coverRequest;
+    coverProcessing = true;
+    renderCoverPicker();
+    window.TextviewCoverPicker.setStatus('표지를 준비하고 있습니다.');
+    try {
+      const value = await window.TextviewCoverImage.prepare(file);
+      if (!coverActive || token !== coverRequest) return;
+      releaseCoverDraft();
+      coverDraft = { ...value, url: URL.createObjectURL(value.blob), custom: true,
+        changed: true, ownedURL: true, resultId };
+      window.TextviewCoverPicker.setStatus('');
+    } catch (error) {
+      if (token === coverRequest) window.TextviewCoverPicker.setStatus(explainError(error), true);
+    } finally {
+      coverProcessing = false;
+      renderCoverPicker();
+    }
+  }
+
+  async function selectSearchCover(id) {
+    if (!coverActive || coverProcessing) return;
+    const result = coverSearch.results.find(item => item.id === id);
+    if (!result) return;
+    const token = ++coverRequest;
+    coverProcessing = true;
+    renderCoverPicker();
+    window.TextviewCoverPicker.setStatus('선택한 표지를 불러오고 있습니다.');
+    let file;
+    try {
+      file = await window.TextviewCoverSearch.getImage(result);
+    } catch (error) {
+      if (token === coverRequest) window.TextviewCoverPicker.setStatus(explainError(error), true);
+    } finally {
+      coverProcessing = false;
+      renderCoverPicker();
+    }
+    if (file && coverActive && token === coverRequest) await selectCoverFile(file, id);
+  }
+
+  function useDefaultCover() {
+    if (!coverActive || coverProcessing) return;
+    releaseCoverDraft();
+    coverDraft = { url: '', custom: false, changed: !!storedCover(coverBookName), ownedURL: false };
+    window.TextviewCoverPicker.setStatus('');
+    renderCoverPicker();
+  }
+
+  async function saveCover() {
+    if (!coverActive || !coverDraft?.changed || coverProcessing || busy || !db) return;
+    const book = coverBookName;
+    const key = 'cover:' + book;
+    coverProcessing = true;
+    renderCoverPicker();
+    window.TextviewCoverPicker.setStatus('표지를 저장하고 있습니다.');
+    try {
+      if (coverDraft.custom) {
+        const record = { key, value: { blob: coverDraft.blob, width: coverDraft.width,
+          height: coverDraft.height, fileName: coverDraft.fileName }, updatedAt: Date.now() };
+        await dbRequest('state', 'put', record);
+        memoryState.set(key, record);
+      } else {
+        await dbRequest('state', 'delete', key);
+        memoryState.delete(key);
+      }
+      coverProcessing = false;
+      renderHome();
+      showShelf();
+      showToast('표지를 저장했습니다.');
+    } catch (error) {
+      window.TextviewCoverPicker.setStatus('표지 저장에 실패했습니다. ' + explainError(error), true);
+    } finally {
+      coverProcessing = false;
+      renderCoverPicker();
+    }
+  }
+
   // Each screen reads the same existing chapter metadata and reading state.
   function bookModel(name) {
     const list = inBook(name);
@@ -196,7 +382,8 @@
       lastReadAt: saved ? memoryState.get(isLastBook ? 'last' : 'lastBook:' + name)?.updatedAt || 0 : 0,
       chapterId: chapter.id, chapterName: cleanName(chapter.name), ratio, hasRead: !!saved,
       progressRatio: (list.findIndex(item => item.id === chapter.id) + ratio) / list.length,
-      artIndex: window.TextviewHome?.getArtIndex(name) || 0
+      artIndex: window.TextviewHome?.getArtIndex(name) || 0,
+      coverUrl: coverURL(name), hasCustomCover: !!storedCover(name)
     };
   }
 
@@ -224,11 +411,13 @@
     window.TextviewShelf?.render(data);
     window.TextviewNAS?.render({ ready: !!db && !busy, error: homeError });
     renderBookDetail();
+    renderCoverPicker();
   }
 
   function showHome() {
-    if (busy || switching || suppressPosition) return;
+    if (busy || switching || suppressPosition || coverProcessing) return;
     savePosition();
+    hideCoverPicker();
     readingActive = false;
     shelfActive = false;
     nasActive = false;
@@ -257,10 +446,11 @@
   }
 
   function showBookDetail(book, fromReader = false) {
-    if (busy || switching || suppressPosition || !db || !window.TextviewBookDetail) return;
+    if (busy || switching || suppressPosition || coverProcessing || !db || !window.TextviewBookDetail) return;
     if (!inBook(book).length) { showToast('작품을 찾지 못했습니다.'); return; }
     savePosition();
-    if (!fromReader && !detailActive) detailReturn = shelfActive ? 'shelf' : 'home';
+    if (!fromReader && !detailActive) detailReturn = shelfActive || coverActive ? 'shelf' : 'home';
+    hideCoverPicker();
     detailBookName = book;
     detailActive = true;
     readingActive = false;
@@ -289,8 +479,9 @@
   }
 
   function showShelf() {
-    if (busy || switching || suppressPosition || !db) return;
+    if (busy || switching || suppressPosition || coverProcessing || !db) return;
     savePosition();
+    hideCoverPicker();
     readingActive = false;
     shelfActive = true;
     nasActive = false;
@@ -344,8 +535,9 @@
   }
 
   function showNAS() {
-    if (busy || switching || suppressPosition) return;
+    if (busy || switching || suppressPosition || coverProcessing) return;
     savePosition();
+    hideCoverPicker();
     readingActive = false;
     shelfActive = false;
     nasActive = true;
@@ -687,6 +879,7 @@
           tx.objectStore('state').delete('position:' + chapter.id);
           tx.objectStore('state').delete('bookmark:' + chapter.id);
         }
+        tx.objectStore('state').delete('cover:' + book);
         tx.oncomplete = resolve;
         tx.onabort = () => reject(tx.error);
         tx.onerror = () => {};
@@ -697,6 +890,8 @@
         try { localStorage.removeItem(PREFIX + 'position:' + chapter.id); } catch {}
         try { localStorage.removeItem(PREFIX + 'bookmark:' + chapter.id); } catch {}
       }
+      memoryState.delete('cover:' + book);
+      coverURL(book);
       if (current?.book === book) {
         readingActive = false;
         window.TextviewReaderUI?.hide();
@@ -740,6 +935,12 @@
       });
       const payload = { format: 'offline-txt-bookshelf', version: 1, exportedAt: new Date().toISOString(),
         settings, last: readState('last', null), chapters: items };
+      const covers = [];
+      for (const book of new Set(chapters.map(chapter => chapter.book))) {
+        const cover = storedCover(book);
+        if (cover) covers.push({ book, image: await window.TextviewCoverImage.serialize(cover) });
+      }
+      if (covers.length) payload.covers = covers;
       const filename = '호율-시리즈-책장-백업-' + new Date().toISOString().slice(0, 10) + '.json';
       backupFile = new File([JSON.stringify(payload)], filename, { type: 'application/json' });
       if (backupURL) URL.revokeObjectURL(backupURL);
@@ -768,13 +969,27 @@
         if (!item || typeof item.book !== 'string' || !item.book.trim() || item.book.length > 100 ||
             typeof item.name !== 'string' || !item.name || item.name.length > 255 || typeof item.text !== 'string' || item.text.length > MAX_FILE_BYTES) throw new Error('백업에 올바르지 않거나 너무 큰 TXT 항목이 있습니다.');
       }
+      const validBooks = new Set([...chapters.map(chapter => chapter.book),
+        ...payload.chapters.map(item => item.book.trim().normalize('NFC'))]);
+      const restoredCovers = new Map();
+      if (payload.covers !== undefined) {
+        if (!Array.isArray(payload.covers) || payload.covers.length > validBooks.size) throw new Error('백업의 표지 목록이 올바르지 않습니다.');
+        for (const item of payload.covers) {
+          if (!item || typeof item.book !== 'string' || !item.book.trim() || item.book.length > 100) throw new Error('백업의 표지 작품명이 올바르지 않습니다.');
+          const book = item.book.trim().normalize('NFC');
+          if (!validBooks.has(book) || restoredCovers.has(book)) throw new Error('백업의 표지 작품명이 올바르지 않습니다.');
+          restoredCovers.set(book, await window.TextviewCoverImage.restore(item.image));
+        }
+      }
       const wasEmpty = chapters.length === 0;
+      const availableBooks = new Set(chapters.map(chapter => chapter.book));
       const known = new Set(chapters.map(chapter => chapter.id));
       for (const item of payload.chapters) {
         const book = item.book.trim().normalize('NFC');
         const id = chapterId(book, item.name);
         if (known.has(id)) { skipped++; continue; }
         await saveChapter({ id, book, name: item.name, bytes: new Blob([item.text]).size, encoding: 'backup', addedAt: Date.now() }, item.text);
+        availableBooks.add(book);
         known.add(id);
         writeState('position:' + id, { ratio: clamp(item.position, 0, 1, 0) });
         if (item.bookmark && typeof item.bookmark.ratio === 'number') {
@@ -785,6 +1000,15 @@
           $('backupStatus').textContent = added + '개 복원 중…';
           await new Promise(resolve => setTimeout(resolve, 0));
         }
+      }
+      for (const [book, value] of restoredCovers) {
+        if (!availableBooks.has(book)) continue;
+        const key = 'cover:' + book;
+        const record = await dbRequest('state', 'get', key);
+        if (record?.value?.blob instanceof Blob) { memoryState.set(key, record); continue; }
+        const restored = { key, value, updatedAt: Date.now() };
+        await dbRequest('state', 'put', restored);
+        memoryState.set(key, restored);
       }
       if (wasEmpty) {
         settings = normalizeSettings(payload.settings);
@@ -917,12 +1141,16 @@
     openImport: () => openImport(), openHelp, showHome, notify: showToast
   };
   if (window.TextviewShelf) window.TextviewShelf.actions = {
-    openBook: openLibrary, openImport: () => openImport(), openHelp,
+    openBook: showCoverPicker, manageBook: openLibrary, openImport: () => openImport(), openHelp,
     showHome, notify: showToast
   };
   if (window.TextviewNAS) window.TextviewNAS.actions = { showHome, showShelf, importDownloaded, notify: showToast };
   if (window.TextviewBookDetail) window.TextviewBookDetail.actions = {
     back: backFromBookDetail, openChapter, notify: showToast
+  };
+  if (window.TextviewCoverPicker) window.TextviewCoverPicker.actions = {
+    back: showShelf, selectFile: selectCoverFile, useDefault: useDefaultCover,
+    save: saveCover, openBook: showBookDetail, search: searchCovers, chooseResult: selectSearchCover
   };
   if (window.TextviewReaderUI) window.TextviewReaderUI.actions = {
     back: backFromReader, toggleBookmark, openContents: () => openLibrary(current?.book),

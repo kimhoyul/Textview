@@ -132,6 +132,9 @@
     node.classList.remove('detail-art-0', 'detail-art-1', 'detail-art-2', 'detail-art-3');
     node.classList.add('detail-art-' + artIndex(book));
     node.querySelector('.detail-cover-title').textContent = book?.name || '';
+    node.classList.toggle('has-custom-cover', Boolean(book?.coverUrl));
+    if (book?.coverUrl) node.style.backgroundImage = 'url(' + JSON.stringify(book.coverUrl) + ')';
+    else node.style.removeProperty('background-image');
   }
 
   function render(data = {}) {
@@ -270,7 +273,7 @@
       $('bookDetailEmptyDescription').textContent = '다른 제목이나 회차 번호로 검색해 주세요.';
     } else {
       $('bookDetailEmptyTitle').textContent = '아직 회차가 없습니다';
-      $('bookDetailEmptyDescription').textContent = '내 서재에서 TXT 파일을 추가해 주세요.';
+      $('bookDetailEmptyDescription').textContent = '보관함에서 TXT 파일을 추가해 주세요.';
     }
   }
 

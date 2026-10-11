@@ -70,14 +70,14 @@
     </section>
     <div class="nas-location-dock" id="nasLocationDock" hidden><button type="button" class="nas-location-pill" id="nasLocationCapsule" data-nas-action="open-location" aria-haspopup="dialog" aria-controls="nasLocationMenu" aria-expanded="false"><span id="nasLocationLabel">NAS</span></button></div>
     <div class="nas-location-layer" id="nasLocationLayer" hidden><button type="button" class="nas-location-backdrop" data-nas-action="close-location" aria-label="위치 메뉴 닫기"></button><section class="nas-location-menu" id="nasLocationMenu" role="dialog" aria-modal="true" aria-labelledby="nasLocationTitle"><header class="nas-location-menu-head"><h2 id="nasLocationTitle">현재 위치</h2><button type="button" class="nas-icon-button" id="nasLocationClose" data-nas-action="close-location" aria-label="닫기">${icon('close')}</button></header><nav class="nas-breadcrumbs" id="nasBreadcrumbs" aria-label="현재 폴더 위치"></nav><button type="button" class="nas-text-button" data-nas-action="logout" id="nasLogout" hidden>로그아웃</button></section></div>
-    <div class="nas-import-dock" id="nasImportDock" hidden><button type="button" class="nas-import-capsule" id="nasImportCapsule" data-nas-action="open-import">${icon('download')}<span id="nasImportCapsuleText">내 서재에 가져오기</span></button></div>
+    <div class="nas-import-dock" id="nasImportDock" hidden><button type="button" class="nas-import-capsule" id="nasImportCapsule" data-nas-action="open-import">${icon('download')}<span id="nasImportCapsuleText">보관함에 가져오기</span></button></div>
     <div class="nas-sheet" id="nasImportSheet" hidden><button type="button" class="nas-sheet-backdrop" data-nas-action="close-import" aria-label="가져오기 창 닫기"></button>
     <section class="nas-download-panel" id="nasDownloadPanel" role="dialog" aria-modal="true" aria-labelledby="nasImportTitle" tabindex="-1">
-      <div class="nas-sheet-handle" aria-hidden="true"></div><header class="nas-sheet-header"><h2 id="nasImportTitle">내 서재에 가져오기</h2><button type="button" class="nas-icon-button" id="nasImportClose" data-nas-action="close-import" aria-label="닫기">${icon('close')}</button></header>
+      <div class="nas-sheet-handle" aria-hidden="true"></div><header class="nas-sheet-header"><h2 id="nasImportTitle">보관함에 가져오기</h2><button type="button" class="nas-icon-button" id="nasImportClose" data-nas-action="close-import" aria-label="닫기">${icon('close')}</button></header>
       <div class="nas-book-label"><label for="nasBookName">책 이름</label><span id="nasSelectionCount">선택한 TXT 없음</span></div>
       <input id="nasBookName" type="text" value="내 책" maxlength="100" autocomplete="off" aria-label="TXT를 추가할 책 이름">
       <div class="nas-transfer-progress" id="nasTransferProgress" hidden><div class="nas-progress-heading"><span id="nasTransferStatus" role="status" aria-live="polite"></span><button type="button" data-nas-action="cancel" id="nasCancel">취소</button></div><progress id="nasDownloadProgress" max="1" value="0"></progress><p id="nasTransferFilename"></p></div>
-      <button type="button" class="nas-primary-button nas-download-button" data-nas-action="download" id="nasDownloadButton">${icon('download')}<span>내 서재에 추가</span></button>
+      <button type="button" class="nas-primary-button nas-download-button" data-nas-action="download" id="nasDownloadButton">${icon('download')}<span>보관함에 추가</span></button>
     </section></div>`;
   document.body.appendChild(screen);
 
@@ -817,7 +817,7 @@
     $('nasLogout').disabled = locked && !selectingAll;
     $('nasBookName').disabled = locked;
     $('nasDownloadButton').disabled = !ready || !authenticated || locked || !selected.size || !$('nasBookName').value.trim();
-    $('nasDownloadButton').querySelector('span').textContent = busy === 'download' ? '가져오는 중…' : '내 서재에 추가';
+    $('nasDownloadButton').querySelector('span').textContent = busy === 'download' ? '가져오는 중…' : '보관함에 추가';
     $('nasSelectionCount').textContent = selected.size ? `TXT ${selected.size}개 선택` : '선택한 TXT 없음';
     $('nasImportCapsuleText').textContent = `${selected.size}개 서재에 가져오기`;
     $('nasImportCapsule').disabled = !ready || locked || !selected.size;
@@ -906,7 +906,7 @@
   function resultText(result, interrupted) {
     const pieces = [];
     if (interrupted) pieces.push('가져오기를 중단했습니다.');
-    if (result.added) pieces.push(`${result.added}개 파일을 내 서재에 추가했습니다.`);
+    if (result.added) pieces.push(`${result.added}개 파일을 보관함에 추가했습니다.`);
     if (result.skipped) pieces.push(`${result.skipped}개 파일은 이미 서재에 있습니다.`);
     if (result.failed) pieces.push(`${result.failed}개 파일을 가져오지 못했습니다.`);
     return pieces.join(' ') || (interrupted ? '가져오기를 중단했습니다.' : '가져온 파일이 없습니다.');
@@ -914,7 +914,7 @@
 
   async function downloadSelected() {
     if (busy || !visible || !authenticated || !ready || !selected.size) return;
-    if (typeof api.actions.importDownloaded !== 'function') { message('서재를 준비하지 못했습니다. 앱을 다시 열어 주세요.', 'error'); return; }
+    if (typeof api.actions.importDownloaded !== 'function') { message('보관함을 준비하지 못했습니다. 앱을 다시 열어 주세요.', 'error'); return; }
     const bookName = $('nasBookName').value.trim();
     if (!bookName) { $('nasBookName').focus(); return; }
     const files = [...selected.values()];

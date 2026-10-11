@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/synology.php';
+require_once __DIR__ . '/cover-search.php';
 
 function nas_private_directory(string $directory): void
 {
@@ -381,7 +382,8 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             $sessionReady = extension_loaded('session');
             nas_json(['ok' => true, 'ready' => $phpReady && $curlReady && $sessionReady,
                 'php' => PHP_VERSION, 'curl' => $curlReady, 'session' => $sessionReady,
-                'gatewayVersion' => (string)($config['gateway_version'] ?? 'nas4')]);
+                'gatewayVersion' => (string)($config['gateway_version'] ?? 'nas6'),
+                'coverSearch' => nas_cover_available()]);
         }
         if (nas_cors($config)) { return; }
         if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
@@ -403,6 +405,8 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             'login' => ['action', 'username', 'password', 'otp', 'authMode'],
             'list' => ['action', 'path', 'offset', 'limit'],
             'download' => ['action', 'path'],
+            'cover_search' => ['action', 'query'],
+            'cover_download' => ['action', 'token'],
             default => throw nas_error('INVALID_REQUEST'),
         };
         foreach (array_keys($input) as $key) { if (!in_array($key, $allowed, true)) { throw nas_error('INVALID_REQUEST'); } }
@@ -418,6 +422,19 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
         if ($action === 'status') { nas_json(nas_status($config)); }
         if ($action === 'logout') { nas_destroy_session($config, $transport); nas_json(['ok' => true]); }
         if ($action === 'approval_cancel') { nas_cancel_pending($config, $transport); nas_json(nas_status($config)); }
+        if ($action === 'cover_search') {
+            if (!nas_cover_available()) { throw nas_cover_error(); }
+            nas_json(['ok' => true, 'results' => nas_cover_search($input['query'] ?? null, $_SESSION)]);
+        }
+        if ($action === 'cover_download') {
+            if (!nas_cover_available()) { throw nas_cover_error(); }
+            $cover = nas_cover_download($input['token'] ?? null, $_SESSION);
+            if (!session_write_close()) { throw nas_error('NAS_UNREACHABLE'); }
+            header('Content-Type: ' . $cover['type']);
+            header('Content-Length: ' . strlen($cover['body']));
+            echo $cover['body'];
+            return;
+        }
         $client = new SynologyClient($config, $transport);
         if ($action === 'approval_status') {
             $pending = $_SESSION['approval'] ?? null;

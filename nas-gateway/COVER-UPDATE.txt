@@ -1,0 +1,41 @@
+호율 시리즈 · 인터넷 표지 검색 업데이트
+
+업로드 위치
+/volume1/web/NASDownloader/textview-nas/
+
+업로드할 파일 3개
+api.php
+synology.php
+cover-search.php
+
+세 파일을 위 폴더에 함께 복사하고 같은 이름의 파일을 덮어쓰세요.
+기존 config.php는 그대로 사용합니다. ZIP에는 config.php가 없습니다.
+앱과 TXT 파일은 이 폴더에 올릴 필요가 없습니다.
+
+설치 확인 주소
+https://chhc007.synology.me:9444/textview-nas/api.php?health=1
+
+정상 응답에는 ready: true와 coverSearch: true가 표시됩니다.
+gatewayVersion은 기존 config.php 값에 따라 이전 번호로 표시될 수 있습니다.
+coverSearch가 이번 표지 검색 설치 확인 값입니다.
+coverSearch가 false면 Web Station의 PHP 프로필에서 DOM 확장을 확인하세요.
+cURL과 세션 기능도 기존처럼 켜 두세요.
+
+사용 방법
+앱의 보관함에서 책을 누릅니다.
+작품 이름을 검색합니다.
+표지를 선택하고 오른쪽 위 저장을 누릅니다.
+저장한 표지는 이 기기에 보관됩니다. 이후에는 인터넷 없이도 표시됩니다.
+
+연결 방식
+네이버 시리즈의 공개 작품 검색에서 표지 후보를 찾습니다.
+선택한 후보만 NAS의 연결 서버가 가져옵니다.
+검색은 NAS 로그인과 별도의 임시 세션을 사용합니다.
+관리자 비밀번호나 OTP를 검색에 보내지 않습니다.
+기존 NAS 로그인과 TXT 파일 요청의 인증은 유지됩니다.
+브라우저가 보낸 임의의 URL은 다운로드하지 않습니다.
+HTTPS 인증서를 확인하고, 표지 파일 크기와 이미지 형식을 검사합니다.
+
+네이버 시리즈의 공개 웹 화면은 지원 API가 아닙니다.
+화면 구조가 변경되면 표지 검색 연결의 업데이트가 필요할 수 있습니다.
+보조 검색은 Open Library를 사용합니다. 국내 웹소설 표지가 부족할 수 있습니다.

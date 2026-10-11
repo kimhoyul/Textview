@@ -144,10 +144,14 @@
     row.dataset.shelfAction = 'book';
     row.dataset.bookIndex = String(state.books.indexOf(book));
     row.disabled = !state.ready;
-    row.setAttribute('aria-label', `${book.name}, 총 ${book.count}화, ${formatSize(book.bytes)}, 목차 열기`);
+    row.setAttribute('aria-label', `${book.name}, 총 ${book.count}화, ${formatSize(book.bytes)}, 표지 선택`);
     const cover = element('span', 'bookshelf-cover bookshelf-art-' + artIndex(book));
     cover.setAttribute('aria-hidden', 'true');
     cover.appendChild(element('span', 'bookshelf-cover-title', book.name));
+    if (book.coverUrl) {
+      cover.classList.add('has-custom-cover');
+      cover.style.backgroundImage = 'url(' + JSON.stringify(book.coverUrl) + ')';
+    }
     const copy = element('span', 'bookshelf-book-copy');
     copy.append(element('span', 'bookshelf-book-name', book.name), element('span', 'bookshelf-book-count', `총 ${book.count}화`));
     const right = element('span', 'bookshelf-book-right');
@@ -242,7 +246,7 @@
     else if (action === 'book' && book) runAction('openBook', book.name);
     else if (action === 'manage') {
       const first = visibleBooks[0] || state.books[0];
-      if (first) runAction('openBook', first.name);
+      if (first) runAction('manageBook', first.name);
     }
   });
   $('bookshelfSearchInput').addEventListener('input', event => {

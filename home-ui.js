@@ -27,25 +27,25 @@
         </div>
         <span id="homeComixHint" class="home-visually-hidden">준비 중</span>
         <div class="home-header-actions">
-          <button class="home-icon-button" id="homeSearchToggle" type="button" data-home-action="search" aria-label="내 서재 검색" aria-controls="homeSearchPanel" aria-expanded="false">${svg('search')}</button>
+          <button class="home-icon-button" id="homeSearchToggle" type="button" data-home-action="search" aria-label="보관함 검색" aria-controls="homeSearchPanel" aria-expanded="false">${svg('search')}</button>
         </div>
       </div>
       <nav class="home-navigation" aria-label="주요 메뉴">
         <button type="button" class="is-active" data-home-action="home" aria-current="page">홈</button>
-        <button type="button" data-home-action="library">내 서재</button>
+        <button type="button" data-home-action="library">보관함</button>
         <button type="button" data-home-action="nas">NAS</button>
       </nav>
       <div id="homeSearchPanel" class="home-search-panel" hidden>
         <div class="home-search-field">
           ${svg('search')}
-          <input id="homeSearchInput" type="search" placeholder="작품 이름 검색" aria-label="내 서재의 작품 이름 검색" enterkeyhint="search" autocomplete="off">
+          <input id="homeSearchInput" type="search" placeholder="작품 이름 검색" aria-label="보관함의 작품 이름 검색" enterkeyhint="search" autocomplete="off">
           <button type="button" class="home-icon-button" data-home-action="close-search" aria-label="검색 닫기">${svg('close')}</button>
         </div>
       </div>
     </header>
     <div class="home-content" id="homeNovelPanel" role="tabpanel" aria-labelledby="homeNovelTab">
       <section class="home-search-results" id="homeSearchResults" aria-labelledby="homeSearchHeading" hidden>
-        <div class="home-section-head"><h2 id="homeSearchHeading">내 서재 검색</h2><span id="homeSearchCount" class="home-search-count" aria-live="polite"></span></div>
+        <div class="home-section-head"><h2 id="homeSearchHeading">보관함 검색</h2><span id="homeSearchCount" class="home-search-count" aria-live="polite"></span></div>
         <div id="homeSearchGrid" class="home-book-grid"></div>
         <p id="homeSearchEmpty" class="home-search-empty" hidden>검색한 작품이 없습니다.</p>
       </section>
@@ -56,15 +56,15 @@
         </section>
         <section class="home-library-section" aria-labelledby="homeLibraryHeading">
           <div class="home-section-head">
-            <h2 id="homeLibraryHeading">내 서재에 담긴 작품</h2>
+            <h2 id="homeLibraryHeading">보관함에 담긴 작품</h2>
             <button type="button" class="home-text-button" data-home-action="library">전체 보기 ${svg('chevron')}</button>
           </div>
           <div id="homeLibraryGrid" class="home-book-grid"></div>
           <div id="homeLibraryEmpty" class="home-library-empty" hidden>
             <div class="home-empty-books" aria-hidden="true"><span></span><span></span><span></span></div>
             <h3>좋아하는 이야기를 담아보세요</h3>
-            <p>내 서재에서 작품을 추가해보세요.</p>
-            <button class="home-primary-button" type="button" data-home-action="library">내 서재로 가기 ${svg('chevron')}</button>
+            <p>보관함에서 작품을 추가해보세요.</p>
+            <button class="home-primary-button" type="button" data-home-action="library">보관함으로 가기 ${svg('chevron')}</button>
           </div>
           <p id="homeLoadStatus" class="home-load-status" role="status" hidden></p>
         </section>
@@ -125,6 +125,10 @@
 
   function addArt(element, book) {
     element.classList.add('home-art', 'home-art-' + artIndex(book.name));
+    if (book.coverUrl) {
+      element.classList.add('has-custom-cover');
+      element.style.backgroundImage = 'url(' + JSON.stringify(book.coverUrl) + ')';
+    }
   }
 
   function sortedBooks(mode) {
@@ -167,8 +171,15 @@
     const slide = makeElement('article', 'home-hero-slide');
     addArt(slide, book);
     slide.setAttribute('aria-label', book.name);
+    if (book.coverUrl) {
+      const cover = makeElement('img', 'home-hero-cover');
+      cover.src = book.coverUrl;
+      cover.alt = '';
+      cover.setAttribute('aria-hidden', 'true');
+      slide.appendChild(cover);
+    }
     const content = makeElement('div', 'home-hero-copy');
-    content.appendChild(makeElement('p', 'home-hero-eyebrow', book.hasRead ? '이어서 읽기' : '내 서재에서 읽기'));
+    content.appendChild(makeElement('p', 'home-hero-eyebrow', book.hasRead ? '이어서 읽기' : '보관함에서 읽기'));
     content.appendChild(makeElement('h2', 'home-hero-title', book.name));
     const chapter = book.chapterName || `${book.count}화`;
     content.appendChild(makeElement('p', 'home-hero-chapter', chapter));
@@ -186,11 +197,11 @@
   function createWelcomeHero() {
     const slide = makeElement('article', 'home-hero-slide home-hero-welcome home-art home-art-0');
     const content = makeElement('div', 'home-hero-copy');
-    content.appendChild(makeElement('p', 'home-hero-eyebrow', '내 손안의 서재'));
+    content.appendChild(makeElement('p', 'home-hero-eyebrow', '나만의 보관함'));
     const title = makeElement('h2', 'home-hero-title');
     title.append('나만의 이야기,', document.createElement('br'), '한곳에.');
     content.append(title, makeElement('p', 'home-hero-chapter', '좋아하는 TXT를 담고 읽어보세요.'));
-    const button = makeElement('button', 'home-primary-button', '내 서재로 가기');
+    const button = makeElement('button', 'home-primary-button', '보관함으로 가기');
     button.type = 'button';
     button.dataset.homeAction = 'library';
     button.disabled = !state.ready;
@@ -220,7 +231,7 @@
     $('homeLibraryGrid').replaceChildren(...displayBooks.map(book => createCard(book)));
     $('homeLibraryEmpty').hidden = Boolean(state.books.length) || !state.ready || Boolean(state.error);
     $('homeLoadStatus').hidden = state.ready && !state.error;
-    $('homeLoadStatus').textContent = state.error ? '서재를 불러오지 못했습니다. 앱을 다시 열어 주세요.' : '내 서재를 불러오고 있습니다.';
+    $('homeLoadStatus').textContent = state.error ? '보관함을 불러오지 못했습니다. 앱을 다시 열어 주세요.' : '보관함을 불러오고 있습니다.';
     screen.querySelectorAll('[data-home-action="library"]').forEach(button => { button.disabled = !state.ready; });
     renderRecent();
     renderSearch();

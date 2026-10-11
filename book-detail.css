@@ -82,6 +82,9 @@ html:has(body.detail-visible)::-webkit-scrollbar { display: none; }
 .detail-art-1 { background-position: 100% 0; }
 .detail-art-2 { background-position: 0 100%; }
 .detail-art-3 { background-position: 100% 100%; }
+.detail-cover.has-custom-cover { background-size: cover; background-position: center; }
+.detail-cover.has-custom-cover::after,
+.detail-cover.has-custom-cover .detail-cover-title { display: none; }
 .detail-cover::after { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(0deg, rgba(5,7,12,.82), rgba(5,7,12,.05) 80%); }
 .detail-cover-title { position: absolute; right: 8px; bottom: 13px; left: 8px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: #fff; font-family: Georgia, "Apple SD Gothic Neo", serif; font-size: 13px; line-height: 1.42; font-weight: 700; text-align: center; word-break: keep-all; overflow-wrap: anywhere; text-shadow: 0 1px 4px #05070c; }
 .detail-intro-copy { flex: 1; min-width: 0; padding-top: 1px; }
