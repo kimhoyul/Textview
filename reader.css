@@ -1,3 +1,11 @@
+@font-face {
+  font-family: "Nanum Myeongjo";
+  src: url("./fonts/NanumMyeongjo-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
 /* These controls are scoped to the reader; the library keeps its own theme. */
 body.reading {
   --reader-control-bg: #f5f3f0;
@@ -18,8 +26,10 @@ body.reading.dark {
 }
 
 body.reading #reader {
-  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
-  letter-spacing: -.02em;
+  font-family: "Nanum Myeongjo", "AppleMyungjo", "Batang", serif;
+  font-weight: 400;
+  font-style: normal;
+  letter-spacing: normal;
 }
 
 .reader-command, .reader-settings-panel, .reader-page-controls { display: none; }
