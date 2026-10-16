@@ -37,6 +37,9 @@
   let lastPanelHeight = -1;
   let lastBarHeight = -1;
   let lastFooterHeight = -1;
+  let seekPointer = null;
+  let seekDraft = null;
+  let seekDirty = false;
   let state = { active: false, ready: false, settings: { ...defaults }, page: 1, pageCount: 1 };
   const api = { actions: {}, render, show, hide, openSettings, closeSettings, isSettingsOpen: () => settingsOpen };
   window.TextviewReaderUI = api;
@@ -97,11 +100,65 @@
   topbar.append(command, panel);
 
   const pageControls = document.createElement('div');
-  pageControls.className = 'reader-page-controls';
-  pageControls.innerHTML = `<button type="button" class="reader-icon-button" id="readerPreviousPage" data-reader-page="-1" aria-label="이전 페이지">${icon('left')}</button>
-    <span class="reader-page-count" id="readerPageCount" aria-live="off">1 / 1</span>
-    <button type="button" class="reader-icon-button" id="readerNextPage" data-reader-page="1" aria-label="다음 페이지">${icon('right')}</button>`;
+  pageControls.className = 'reader-page-controls reader-progress-controls';
+  pageControls.innerHTML = `<div class="reader-progress-slider">
+      <span class="reader-progress-track" aria-hidden="true"><span class="reader-progress-fill"></span></span>
+      <input type="range" id="readerProgress" min="0" max="1000" step="1" value="0" aria-label="현재 회차 읽기 위치" aria-valuetext="0퍼센트">
+    </div>
+    <span class="reader-progress-percent" id="readerProgressPercent" aria-hidden="true">0%</span>`;
   nav.appendChild(pageControls);
+  const progress = $('readerProgress');
+
+  function safeRatio(value) {
+    return Math.min(1, Math.max(0, Number(value) || 0));
+  }
+
+  function renderProgress(ratio) {
+    const value = Math.round(safeRatio(ratio) * 1000);
+    const percent = Math.round(value / 10);
+    progress.value = String(value);
+    progress.setAttribute('aria-valuetext', `${percent}퍼센트`);
+    pageControls.style.setProperty('--reader-progress', `${value / 10}%`);
+    $('readerProgressPercent').textContent = `${percent}%`;
+  }
+
+  function commitSeek() {
+    if (!seekDirty || seekDraft === null) return;
+    const ratio = seekDraft;
+    seekDirty = false;
+    runAction('seek', ratio, true);
+  }
+
+  function endSeek(event) {
+    if (seekPointer === null || event.pointerId !== seekPointer) return;
+    commitSeek();
+    seekPointer = null;
+    seekDraft = null;
+    renderProgress(state.ratio);
+  }
+
+  progress.addEventListener('pointerdown', event => {
+    if (progress.disabled) return;
+    seekPointer = event.pointerId;
+    seekDraft = safeRatio(progress.value / 1000);
+    seekDirty = false;
+  });
+  progress.addEventListener('input', () => {
+    if (progress.disabled) return;
+    seekDraft = safeRatio(progress.value / 1000);
+    seekDirty = true;
+    renderProgress(seekDraft);
+    runAction('seek', seekDraft, false);
+  });
+  progress.addEventListener('change', () => {
+    commitSeek();
+    if (seekPointer === null) {
+      seekDraft = null;
+      renderProgress(state.ratio);
+    }
+  });
+  window.addEventListener('pointerup', endSeek);
+  window.addEventListener('pointercancel', endSeek);
 
   function runAction(name, ...args) {
     const action = api.actions[name];
@@ -149,10 +206,6 @@
       case 'settings': settingsOpen ? closeSettings() : openSettings(); break;
     }
   });
-  pageControls.addEventListener('click', event => {
-    const button = event.target.closest('[data-reader-page]');
-    if (button && !button.disabled) runAction('page', Number(button.dataset.readerPage));
-  });
   panel.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -192,13 +245,22 @@
 
   function render(model = {}) {
     const wasActive = state.active;
+    const previousChapter = state.chapterId || `${state.bookName}:${state.chapterNumber}:${state.chapterName}`;
     state = {
       ...model,
       active: Boolean(model.active), ready: Boolean(model.ready),
       settings: { ...defaults, ...model.settings },
     };
-    let title = String(state.chapterName || state.bookName || '읽기');
-    if (/^\d+$/.test(title)) title += '화';
+    const chapter = state.chapterId || `${state.bookName}:${state.chapterNumber}:${state.chapterName}`;
+    if (!state.active || !state.ready || chapter !== previousChapter) {
+      seekPointer = null;
+      seekDraft = null;
+      seekDirty = false;
+    }
+    const suppliedNumber = Number(state.chapterNumber);
+    const leadingNumber = String(state.chapterName || '').trim().match(/^(\d+)\s*(?:화|회|[·.\s]|$)/);
+    const chapterNumber = Number.isInteger(suppliedNumber) && suppliedNumber > 0 ? suppliedNumber : Number(leadingNumber?.[1]);
+    const title = Number.isInteger(chapterNumber) && chapterNumber > 0 ? `${chapterNumber}화` : '읽기';
     $('readerChapterTitle').textContent = title;
     $('readerChapterTitle').title = title;
     command.querySelector('[data-reader-action="back"]').setAttribute('aria-label', state.backLabel || '보관함으로 돌아가기');
@@ -209,14 +271,8 @@
     bookmark.setAttribute('aria-pressed', String(Boolean(state.bookmarked)));
     bookmark.setAttribute('aria-label', state.bookmarked ? '책갈피 해제' : '책갈피 추가');
     bookmark.classList.toggle('is-bookmarked', Boolean(state.bookmarked));
-    const page = Math.max(1, Number(state.page) || 1);
-    const total = Math.max(page, Number(state.pageCount) || 1);
-    const scroll = state.settings.viewMode === 'scroll';
-    pageControls.classList.toggle('reader-scroll-progress', scroll);
-    $('readerPageCount').textContent = scroll ? `${Math.round(Math.min(1, Math.max(0, Number(state.ratio) || 0)) * 100)}%` : `${page} / ${total}`;
-    $('readerPageCount').setAttribute('aria-label', scroll ? '읽은 위치' : `${total}페이지 중 ${page}페이지`);
-    $('readerPreviousPage').disabled = !state.active || !state.ready || page <= 1;
-    $('readerNextPage').disabled = !state.active || !state.ready || page >= total;
+    progress.disabled = !state.active || !state.ready;
+    renderProgress(seekPointer !== null && seekDraft !== null ? seekDraft : state.ratio);
     $('prevBtn').disabled = !state.active || !state.ready || !state.canPrevChapter;
     $('nextBtn').disabled = !state.active || !state.ready || !state.canNextChapter;
     renderSettings();
@@ -237,6 +293,9 @@
     runAction('layoutWillChange');
     closeSettings(false, false);
     document.body.classList.remove('reader-ui-active');
+    seekPointer = null;
+    seekDraft = null;
+    seekDirty = false;
     document.documentElement.style.setProperty('--reader-settings-height', '0px');
     document.documentElement.style.setProperty('--reader-topbar-height', '0px');
     document.documentElement.style.setProperty('--reader-bottombar-height', '0px');

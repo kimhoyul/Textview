@@ -61,13 +61,13 @@ body.reading .reader-command {
 
 body.reading .reader-command-title {
   min-width: 0;
-  padding-left: 88px;
+  padding-left: 8px;
   overflow: hidden;
   color: var(--reader-control-text);
   font-size: 16px;
   font-weight: 600;
   line-height: 1.4;
-  text-align: center;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -242,7 +242,7 @@ body.reading .bottombar {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-body.reading .bottombar .nav { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 4px; }
+body.reading .bottombar .nav { grid-template-columns: 60px minmax(0, 1fr) 60px; gap: 8px; }
 body.reading .bottombar #prevBtn,
 body.reading .bottombar #nextBtn {
   min-height: 44px;
@@ -256,17 +256,107 @@ body.reading .bottombar #nextBtn {
 }
 body.reading .bottombar #prevBtn { grid-column: 1; grid-row: 1; text-align: left; }
 body.reading .bottombar #nextBtn { grid-column: 3; grid-row: 1; text-align: right; }
-body.reading .reader-page-controls { display: flex; grid-column: 2; grid-row: 1; align-items: center; justify-content: center; }
-body.reading .reader-page-controls .reader-icon-button svg { width: 19px; height: 19px; }
-body.reading .reader-page-count { min-width: 54px; padding: 0 3px; color: var(--reader-control-muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: center; white-space: nowrap; }
-body.reading .reader-scroll-progress .reader-icon-button { display: none; }
+body.reading .reader-progress-controls {
+  display: flex;
+  grid-column: 2;
+  grid-row: 1;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  --reader-progress-color: #c5acee;
+  --reader-progress-remaining: #55525b;
+}
+body.reading .reader-progress-slider {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 44px;
+}
+body.reading .reader-progress-track {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  left: 7px;
+  height: 3px;
+  margin-top: -1.5px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--reader-progress-remaining);
+  pointer-events: none;
+}
+body.reading .reader-progress-fill {
+  display: block;
+  width: var(--reader-progress, 0%);
+  height: 100%;
+  background: var(--reader-progress-color);
+}
+body.reading #readerProgress {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  min-height: 44px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--reader-progress-color);
+  accent-color: var(--reader-progress-color);
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  touch-action: pan-y;
+}
+body.reading #readerProgress::-webkit-slider-runnable-track {
+  height: 3px;
+  border: 0;
+  background: transparent;
+}
+body.reading #readerProgress::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5.5px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--reader-progress-color);
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+body.reading #readerProgress::-moz-range-track {
+  height: 3px;
+  border: 0;
+  background: transparent;
+}
+body.reading #readerProgress::-moz-range-progress { height: 3px; background: transparent; }
+body.reading #readerProgress::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--reader-progress-color);
+  box-shadow: none;
+}
+body.reading .reader-progress-percent {
+  flex: 0 0 34px;
+  min-width: 34px;
+  color: var(--reader-control-text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
 
 body.reading .reader-command button:focus-visible,
 body.reading .reader-settings-panel button:focus-visible,
-body.reading .reader-page-controls button:focus-visible { outline: 2px solid var(--reader-control-accent); outline-offset: -2px; }
+body.reading #readerProgress:focus-visible { outline: 2px solid var(--reader-control-accent); outline-offset: -2px; }
 body.reading .reader-command button:disabled,
 body.reading .reader-settings-panel button:disabled,
-body.reading .reader-page-controls button:disabled { opacity: .35; }
+body.reading .reader-progress-controls:has(input:disabled) { opacity: .35; }
 
 @media (max-width: 374px) {
   body.reading .reader-settings-panel { padding-right: max(16px, env(safe-area-inset-right)); padding-left: max(16px, env(safe-area-inset-left)); }

@@ -691,6 +691,16 @@
     window.scrollTo(0, max * ratio);
     lastRatio = ratio;
   }
+  function seekReader(value, commit = false) {
+    const layout = window.TextviewReaderLayout;
+    if (!db || !readingActive || !current || busy || switching || suppressPosition || layout?.getState().transitioning || !Number.isFinite(value)) return;
+    const ratio = clamp(value, 0, 1, 0);
+    if (layout) layout.setRatio(ratio, { seek: true });
+    else scrollToRatio(ratio);
+    lastRatio = getRatio();
+    updateProgress();
+    if (commit) savePosition();
+  }
   function updateProgress() {
     if (!readingActive) { renderReaderUI(); return; }
     if (!current) { $('scrollProgress').textContent = '0%'; return; }
@@ -729,6 +739,7 @@
       backLabel: readerBackTarget === 'detail' ? '작품 상세로 돌아가기' : '보관함으로 돌아가기',
       ready: !!db && !busy && !switching && !suppressPosition && !layout.transitioning, settings,
       chapterName: current ? displayChapterTitle(current, true) : '', bookName: current?.book || '',
+      chapterId: current?.id || '', chapterNumber: current ? episodeNumber(current) || (index >= 0 ? index + 1 : null) : null,
       bookmarked: !!(current && readState('bookmark:' + current.id, null)),
       ratio: lastRatio, page: layout.page || 1, pageCount: layout.pageCount || 1,
       canPrevChapter: index > 0, canNextChapter: index >= 0 && index < list.length - 1 });
@@ -1369,6 +1380,7 @@
     page: delta => {
       if (readingActive && !busy && !switching && !suppressPosition) window.TextviewReaderLayout?.page(delta);
     },
+    seek: seekReader,
     layoutWillChange: readerLayoutWillChange, layoutChanged: readerLayoutChanged,
     notify: showToast
   };

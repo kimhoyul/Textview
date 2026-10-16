@@ -287,9 +287,9 @@
     changed();
     return getState();
   }
-  function setRatio(value) {
+  function setRatio(value, options = {}) {
     const nextRatio = ratio(value);
-    const keepCharacter = active && settings.viewMode === 'page' &&
+    const keepCharacter = !options.seek && active && settings.viewMode === 'page' &&
       anchorText === textNode() && anchorOffset !== null && Math.abs(nextRatio - anchorRatio) < 1e-8;
     anchorRatio = nextRatio;
     if (!active || !ensureElements()) return getState();
