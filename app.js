@@ -29,6 +29,11 @@
   const coverURLs = new Map();
   const coverMetadataAttempts = new Set();
   let coverMetadataUpdating = false;
+  const episodeTitleMaps = new WeakMap();
+  const episodeTitleJobs = new Map();
+  const episodeTitleStatus = new Map();
+  const episodeTitleGeneration = new Map();
+  const episodeTitleRetryAfter = new Map();
   let homeError = '';
   let settings = { ...DEFAULTS };
   let busy = false;
@@ -192,6 +197,102 @@
   function storedCover(book) {
     const value = memoryState.get('cover:' + book)?.value;
     return value?.blob instanceof Blob ? value : null;
+  }
+
+  function episodeInfo(book) {
+    const value = memoryState.get('episode-titles:' + book)?.value;
+    if (!value || typeof value !== 'object' || !window.TextviewEpisodeTitleModel) return null;
+    if (!episodeTitleMaps.has(value)) {
+      const record = window.TextviewEpisodeTitleModel.normalize(value);
+      episodeTitleMaps.set(value, record ? { ...record, titles: new Map(record.episodes.map(item => [item.number, item.title])) } : null);
+    }
+    const info = episodeTitleMaps.get(value);
+    const model = window.TextviewEpisodeTitleModel;
+    const author = coverCredits(storedCover(book)).author;
+    return info && model.titleKey(info.title) === model.titleKey(book) && (!author || model.authorKey(author) === model.authorKey(info.author)) ? info : null;
+  }
+
+  function episodeNumber(chapter) {
+    return window.TextviewEpisodeTitleModel?.numberFor(chapter.name, chapter.book) ?? null;
+  }
+
+  function displayChapterTitle(chapter, withNumber = false) {
+    const number = episodeNumber(chapter);
+    const title = number && episodeInfo(chapter.book)?.titles.get(number);
+    return title ? (withNumber ? `${number}화 · ${title}` : title) : cleanName(chapter.name);
+  }
+
+  async function updateEpisodeTitles(book, force = false) {
+    if (!db || busy || episodeTitleJobs.has(book) || !window.TextviewEpisodeTitles || !window.TextviewEpisodeTitleModel) return;
+    if (!force && Date.now() < (episodeTitleRetryAfter.get(book) || 0)) return;
+    const list = inBook(book);
+    if (!list.length) return;
+    const numbers = [...new Set(list.map(episodeNumber).filter(Boolean))];
+    if (!numbers.length) {
+      if (force) { episodeTitleStatus.set(book, { message: '숫자로 된 회차 파일이 없습니다.' }); renderBookDetail(); }
+      return;
+    }
+    if (!navigator.onLine) {
+      if (force) { episodeTitleStatus.set(book, { error: '인터넷 연결 후 회차 제목을 불러와 주세요.' }); renderBookDetail(); }
+      return;
+    }
+    const model = bookModel(book);
+    const saved = episodeInfo(book);
+    const cached = saved && window.TextviewEpisodeTitleModel.titleKey(saved.title) === window.TextviewEpisodeTitleModel.titleKey(book) &&
+      (!model.author || window.TextviewEpisodeTitleModel.authorKey(model.author) === window.TextviewEpisodeTitleModel.authorKey(saved.author)) ? saved : null;
+    const fresh = cached && cached.checkedAt > Date.now() - 24 * 60 * 60 * 1000;
+    if (!force && fresh && numbers.every(number => cached.titles.has(number) || cached.pages.includes(Math.floor((number - 1) / 30) + 1))) return;
+    const job = {};
+    const generation = episodeTitleGeneration.get(book) || 0;
+    episodeTitleJobs.set(book, job);
+    const valid = () => !!db && !busy && inBook(book).length && episodeTitleJobs.get(book) === job && (episodeTitleGeneration.get(book) || 0) === generation;
+    const status = patch => { if (valid()) { episodeTitleStatus.set(book, patch); renderBookDetail(); } };
+    status({ loading: true, message: '회차 제목을 불러오는 중…' });
+    let added = 0;
+    try {
+      const target = cached || await window.TextviewEpisodeTitles.resolveBook(model);
+      if (!valid()) return;
+      const wanted = force || !fresh ? numbers : numbers.filter(number => !cached.titles.has(number) && !cached.pages.includes(Math.floor((number - 1) / 30) + 1));
+      const pages = [...new Set(wanted.map(number => Math.floor((number - 1) / 30) + 1))].sort((a, b) => a - b);
+      const titles = new Map(cached?.titles || []);
+      const checkedPages = new Set(fresh && !force ? cached?.pages || [] : []);
+      let completed = 0;
+      for (const page of pages) {
+        const result = await window.TextviewEpisodeTitles.getPage(target.productId, page);
+        if (!valid()) return;
+        if (window.TextviewEpisodeTitleModel.titleKey(result.title) !== window.TextviewEpisodeTitleModel.titleKey(book) ||
+            (model.author && window.TextviewEpisodeTitleModel.authorKey(model.author) !== window.TextviewEpisodeTitleModel.authorKey(result.author))) throw new Error('작품 정보가 일치하지 않아 회차 제목을 적용하지 않았습니다.');
+        for (const number of titles.keys()) if (number > (page - 1) * 30 && number <= page * 30) titles.delete(number);
+        for (const item of result.episodes) titles.set(item.number, item.title);
+        checkedPages.add(page);
+        const value = window.TextviewEpisodeTitleModel.normalize({ productId: target.productId, title: result.title,
+          author: result.author, episodes: [...titles].map(([number, title]) => ({ number, title })), pages: [...checkedPages], checkedAt: completed + 1 === pages.length ? Date.now() : 0 });
+        if (!value) throw new Error('회차 제목 정보를 확인하지 못했습니다.');
+        const record = { key: 'episode-titles:' + book, value, updatedAt: Date.now() };
+        if (!valid()) return;
+        await dbRequest('state', 'put', record);
+        if (!valid()) return;
+        memoryState.set(record.key, record);
+        added = numbers.filter(number => titles.has(number)).length;
+        status({ loading: true, message: `회차 제목 ${++completed} / ${pages.length} 확인 중…` });
+        renderHome();
+        renderChapterList();
+        if (current?.book === book) {
+          renderReaderUI();
+          if (readingActive) document.title = displayChapterTitle(current, true) + ' · 호율 시리즈';
+        }
+      }
+      episodeTitleRetryAfter.delete(book);
+      status({ message: added ? `회차 제목 ${added.toLocaleString('ko-KR')}개를 저장했습니다.` : '공개된 회차 제목이 없습니다.' });
+    } catch (error) {
+      episodeTitleRetryAfter.set(book, Date.now() + 5 * 60 * 1000);
+      status({ error: (added ? `${added}개 제목을 저장했습니다. ` : '') + explainError(error) });
+    } finally {
+      if (episodeTitleJobs.get(book) === job) {
+        episodeTitleJobs.delete(book);
+        if (episodeTitleStatus.get(book)?.loading) { episodeTitleStatus.set(book, {}); renderBookDetail(); }
+      }
+    }
   }
 
   function coverCredits(value) {
@@ -441,7 +542,7 @@
       bytes: list.reduce((sum, item) => sum + item.bytes, 0),
       addedAt: list.reduce((latest, item) => Math.max(latest, item.addedAt || 0), 0),
       lastReadAt: saved ? memoryState.get(isLastBook ? 'last' : 'lastBook:' + name)?.updatedAt || 0 : 0,
-      chapterId: chapter.id, chapterName: cleanName(chapter.name), ratio, hasRead: !!saved,
+      chapterId: chapter.id, chapterName: displayChapterTitle(chapter, true), ratio, hasRead: !!saved,
       progressRatio: (list.findIndex(item => item.id === chapter.id) + ratio) / list.length,
       artIndex: window.TextviewHome?.getArtIndex(name) || 0,
       coverUrl: coverURL(name), hasCustomCover: !!storedCover(name), ...coverCredits(storedCover(name))
@@ -453,13 +554,15 @@
     const book = bookModel(detailBookName);
     window.TextviewBookDetail.render({ book,
       chapters: inBook(detailBookName).map(chapter => ({
-        id: chapter.id, name: chapter.name, title: cleanName(chapter.name),
+        id: chapter.id, name: chapter.name, title: displayChapterTitle(chapter), episodeNumber: episodeNumber(chapter),
         bytes: chapter.bytes, encoding: chapter.encoding, addedAt: chapter.addedAt,
         ratio: ratioOf(chapter.id),
         hasRead: !!readState('position:' + chapter.id, null) || (book?.hasRead && chapter.id === book.chapterId),
         bookmarked: !!readState('bookmark:' + chapter.id, null)
       })),
       ready: !!db && !busy && !switching,
+      hasEpisodeTitles: !!episodeInfo(detailBookName)?.episodes.length,
+      titleSync: { ...episodeTitleStatus.get(detailBookName), online: navigator.onLine },
       error: book ? '' : '작품을 찾지 못했습니다.'
     });
   }
@@ -528,6 +631,7 @@
     window.TextviewBookDetail.show();
     $('themeColor').content = '#111214';
     document.title = book + ' · 호율 시리즈';
+    void updateEpisodeTitles(book);
   }
 
   function backFromBookDetail() {
@@ -624,7 +728,7 @@
     window.TextviewReaderUI.render({ active: readingActive && !!current,
       backLabel: readerBackTarget === 'detail' ? '작품 상세로 돌아가기' : '보관함으로 돌아가기',
       ready: !!db && !busy && !switching && !suppressPosition && !layout.transitioning, settings,
-      chapterName: current ? cleanName(current.name) : '', bookName: current?.book || '',
+      chapterName: current ? displayChapterTitle(current, true) : '', bookName: current?.book || '',
       bookmarked: !!(current && readState('bookmark:' + current.id, null)),
       ratio: lastRatio, page: layout.page || 1, pageCount: layout.pageCount || 1,
       canPrevChapter: index > 0, canNextChapter: index >= 0 && index < list.length - 1 });
@@ -691,9 +795,9 @@
       $('reader').textContent = content.text; // TXT is never interpreted as HTML.
       $('reader').hidden = false;
       $('empty').hidden = true;
-      $('title').textContent = cleanName(meta.name);
+      $('title').textContent = displayChapterTitle(meta, true);
       $('subtitle').textContent = meta.book;
-      document.title = cleanName(meta.name) + ' · 호율 시리즈';
+      document.title = displayChapterTitle(meta, true) + ' · 호율 시리즈';
       writeState('last', meta.id);
       writeState('lastBook:' + meta.book, meta.id);
       window.TextviewReaderLayout?.show();
@@ -708,6 +812,7 @@
       suppressPosition = false;
       updateNavigation();
       updateProgress();
+      if (readingActive && current) void updateEpisodeTitles(current.book);
     }
   }
   function updateNavigation() {
@@ -799,14 +904,14 @@
     const list = inBook(book);
     const search = $('chapterSearch').value.trim().toLocaleLowerCase();
     const fragment = document.createDocumentFragment();
-    const shown = list.filter(chapter => chapter.name.toLocaleLowerCase().includes(search));
+    const shown = list.filter(chapter => (chapter.name + ' ' + displayChapterTitle(chapter, true)).toLocaleLowerCase().includes(search));
     for (const chapter of shown) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'chapter-row';
       if (current?.id === chapter.id) { button.classList.add('current'); button.setAttribute('aria-current', 'page'); }
       const name = document.createElement('span');
-      name.textContent = cleanName(chapter.name);
+      name.textContent = displayChapterTitle(chapter, true);
       const progress = document.createElement('span');
       progress.textContent = Math.round(ratioOf(chapter.id) * 100) + '%';
       button.append(name, progress);
@@ -942,6 +1047,7 @@
           tx.objectStore('state').delete('bookmark:' + chapter.id);
         }
         tx.objectStore('state').delete('cover:' + book);
+        tx.objectStore('state').delete('episode-titles:' + book);
         tx.oncomplete = resolve;
         tx.onabort = () => reject(tx.error);
         tx.onerror = () => {};
@@ -953,6 +1059,11 @@
         try { localStorage.removeItem(PREFIX + 'bookmark:' + chapter.id); } catch {}
       }
       memoryState.delete('cover:' + book);
+      memoryState.delete('episode-titles:' + book);
+      episodeTitleGeneration.set(book, (episodeTitleGeneration.get(book) || 0) + 1);
+      episodeTitleJobs.delete(book);
+      episodeTitleStatus.delete(book);
+      episodeTitleRetryAfter.delete(book);
       coverURL(book);
       if (current?.book === book) {
         readingActive = false;
@@ -1007,6 +1118,12 @@
         }
       }
       if (covers.length) payload.covers = covers;
+      const episodeTitles = [];
+      for (const book of new Set(chapters.map(chapter => chapter.book))) {
+        const value = memoryState.get('episode-titles:' + book)?.value;
+        if (window.TextviewEpisodeTitleModel?.normalize(value)) episodeTitles.push({ book, ...value });
+      }
+      if (episodeTitles.length) payload.episodeTitles = episodeTitles;
       const filename = '호율-시리즈-책장-백업-' + new Date().toISOString().slice(0, 10) + '.json';
       backupFile = new File([JSON.stringify(payload)], filename, { type: 'application/json' });
       if (backupURL) URL.revokeObjectURL(backupURL);
@@ -1052,6 +1169,17 @@
           restoredCovers.set(book, value);
         }
       }
+      const restoredTitles = new Map();
+      if (payload.episodeTitles !== undefined) {
+        if (!Array.isArray(payload.episodeTitles) || payload.episodeTitles.length > validBooks.size) throw new Error('백업의 회차 제목 목록이 올바르지 않습니다.');
+        for (const item of payload.episodeTitles) {
+          if (!item || typeof item.book !== 'string' || !item.book.trim() || item.book.length > 100) throw new Error('백업의 회차 제목 작품명이 올바르지 않습니다.');
+          const book = item.book.trim().normalize('NFC');
+          const value = window.TextviewEpisodeTitleModel?.normalize(item);
+          if (!value || !validBooks.has(book) || restoredTitles.has(book) || window.TextviewEpisodeTitleModel.titleKey(value.title) !== window.TextviewEpisodeTitleModel.titleKey(book)) throw new Error('백업의 회차 제목 정보가 올바르지 않습니다.');
+          restoredTitles.set(book, value);
+        }
+      }
       const wasEmpty = chapters.length === 0;
       const availableBooks = new Set(chapters.map(chapter => chapter.book));
       const known = new Set(chapters.map(chapter => chapter.id));
@@ -1080,6 +1208,15 @@
         const restored = { key, value, updatedAt: Date.now() };
         await dbRequest('state', 'put', restored);
         memoryState.set(key, restored);
+      }
+      for (const [book, value] of restoredTitles) {
+        if (!availableBooks.has(book)) continue;
+        const key = 'episode-titles:' + book;
+        const existing = await dbRequest('state', 'get', key);
+        if (window.TextviewEpisodeTitleModel.normalize(existing?.value)) { memoryState.set(key, existing); continue; }
+        const record = { key, value, updatedAt: Date.now() };
+        await dbRequest('state', 'put', record);
+        memoryState.set(key, record);
       }
       if (wasEmpty) {
         settings = normalizeSettings(payload.settings);
@@ -1217,7 +1354,7 @@
   };
   if (window.TextviewNAS) window.TextviewNAS.actions = { showHome, showShelf, importDownloaded, notify: showToast };
   if (window.TextviewBookDetail) window.TextviewBookDetail.actions = {
-    back: backFromBookDetail, openChapter, notify: showToast
+    back: backFromBookDetail, openChapter, notify: showToast, refreshTitles: book => updateEpisodeTitles(book, true)
   };
   if (window.TextviewCoverPicker) window.TextviewCoverPicker.actions = {
     back: showShelf, selectFile: selectCoverFile, useDefault: useDefaultCover,
@@ -1281,8 +1418,8 @@
     lastWidth = innerWidth;
     if (readingActive && current && !switching) void changeSettings(() => {});
   });
-  window.addEventListener('online', () => { void checkOffline(); renderHome(); });
-  window.addEventListener('offline', renderOfflineStatus.bind(null, undefined));
+  window.addEventListener('online', () => { void checkOffline(); renderHome(); if (detailActive && detailBookName) void updateEpisodeTitles(detailBookName); else if (readingActive && current) void updateEpisodeTitles(current.book); });
+  window.addEventListener('offline', () => { renderOfflineStatus(); renderBookDetail(); });
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
   async function start() {

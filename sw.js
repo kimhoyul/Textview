@@ -1,7 +1,7 @@
 /* Update VERSION whenever any app-shell file changes. TXT lives in IndexedDB,
    not this cache; an app update must never clear the bookshelf database. */
 'use strict';
-const VERSION = '2.5.2';
+const VERSION = '2.6.0';
 const SCOPE = self.registration.scope;
 const PREFIX = 'offline-txt-shell:' + encodeURIComponent(SCOPE) + ':';
 const CACHE = PREFIX + VERSION;
@@ -9,6 +9,7 @@ const FILES = ['index.html', 'styles.css', 'app.js', 'home.css', 'home-ui.js', '
   'bookshelf.css', 'bookshelf-ui.js',
   'book-detail.css', 'book-detail-ui.js',
   'cover-picker.css', 'cover-picker-ui.js', 'cover-image.js', 'cover-search.js',
+  'episode-title-model.js', 'episode-titles.js',
   'reader.css', 'reader-controls.js', 'reader-layout.js',
   'fonts/NanumMyeongjo-Regular.ttf', 'fonts/OFL-NanumMyeongjo.txt',
   'nas.css', 'nas-ui.js',

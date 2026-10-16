@@ -3,12 +3,13 @@
 업로드 위치
 /volume1/web/NASDownloader/textview-nas/
 
-업로드할 파일 3개
+업로드할 파일 4개
 api.php
 synology.php
 cover-search.php
+episode-titles.php
 
-세 파일을 위 폴더에 함께 복사하고 같은 이름의 파일을 덮어쓰세요.
+네 파일을 위 폴더에 함께 복사하고 같은 이름의 파일을 덮어쓰세요.
 기존 config.php는 그대로 사용합니다. ZIP에는 config.php가 없습니다.
 앱과 TXT 파일은 이 폴더에 올릴 필요가 없습니다.
 

@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/synology.php';
 require_once __DIR__ . '/cover-search.php';
+require_once __DIR__ . '/episode-titles.php';
 
 function nas_private_directory(string $directory): void
 {
@@ -383,7 +384,7 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             nas_json(['ok' => true, 'ready' => $phpReady && $curlReady && $sessionReady,
                 'php' => PHP_VERSION, 'curl' => $curlReady, 'session' => $sessionReady,
                 'gatewayVersion' => (string)($config['gateway_version'] ?? 'nas6'),
-                'coverSearch' => nas_cover_available()]);
+                'coverSearch' => nas_cover_available(), 'episodeTitles' => nas_episode_available()]);
         }
         if (nas_cors($config)) { return; }
         if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
@@ -407,6 +408,7 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             'download' => ['action', 'path'],
             'cover_search' => ['action', 'query'],
             'cover_download' => ['action', 'token'],
+            'episode_titles' => ['action', 'productId', 'page'],
             default => throw nas_error('INVALID_REQUEST'),
         };
         foreach (array_keys($input) as $key) { if (!in_array($key, $allowed, true)) { throw nas_error('INVALID_REQUEST'); } }
@@ -434,6 +436,10 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             header('Content-Length: ' . strlen($cover['body']));
             echo $cover['body'];
             return;
+        }
+        if ($action === 'episode_titles') {
+            if (!nas_episode_available()) { throw nas_episode_error(); }
+            nas_json(['ok' => true] + nas_episode_titles($input['productId'] ?? null, array_key_exists('page', $input) ? $input['page'] : 1, $_SESSION));
         }
         $client = new SynologyClient($config, $transport);
         if ($action === 'approval_status') {

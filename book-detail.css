@@ -101,9 +101,13 @@ html:has(body.detail-visible)::-webkit-scrollbar { display: none; }
 .book-detail-screen .detail-tab.is-active { color: var(--detail-text); font-weight: 750; }
 .detail-tab.is-active::after { content: ""; position: absolute; right: calc(50% - 20px); bottom: -1px; left: calc(50% - 20px); height: 3px; background: var(--detail-lavender); }
 .detail-episodes-panel { background: var(--detail-panel); }
-.detail-list-tools { min-height: 55px; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 0 20px; border-bottom: 1px solid #303034; }
-.detail-count { min-width: 0; font-size: 13px; font-weight: 600; color: #d3d3d9; }
+.detail-list-tools { min-height: 55px; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 0 20px; border-bottom: 1px solid #303034; }
+.detail-count { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: #d3d3d9; white-space: nowrap; }
 .detail-count span { color: var(--detail-lavender); font-weight: 700; }
+.book-detail-screen .detail-title-sync-button { flex-shrink: 0; padding: 0 6px; color: var(--detail-lavender); font-size: 12px; white-space: nowrap; }
+.detail-title-sync-status { padding: 11px 20px; border-bottom: 1px solid #303034; color: #aaa4b4; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.detail-title-sync-status.is-loading { color: var(--detail-lavender); }
+.detail-title-sync-status.is-error { color: #d6b4bc; }
 .book-detail-screen .detail-sort-button { display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; min-width: 86px; color: #adadb6; font-size: 12px; }
 .detail-sort-button svg { width: 16px; height: 16px; }
 .book-detail-screen .detail-last-read { width: 100%; min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 8px 20px; border-bottom: 1px solid #36313e; background: #29252f; color: var(--detail-lavender); text-align: left; font-size: 12px; }

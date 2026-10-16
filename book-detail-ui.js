@@ -50,8 +50,10 @@
     <section class="detail-episodes-panel" id="bookDetailEpisodesPanel" role="tabpanel" aria-labelledby="bookDetailEpisodesTab">
       <div class="detail-list-tools">
         <p class="detail-count" id="bookDetailResultCount" role="status" aria-live="polite"></p>
+        <button class="detail-title-sync-button" id="bookDetailTitleSync" type="button" data-detail-action="refresh-titles">제목 불러오기</button>
         <button class="detail-sort-button" id="bookDetailSort" type="button" data-detail-action="sort" aria-label="최신순으로 정렬">${icon('sort')}<span>첫 화부터</span></button>
       </div>
+      <p class="detail-title-sync-status" id="bookDetailTitleSyncStatus" role="status" aria-live="polite" aria-atomic="true" hidden></p>
       <button class="detail-last-read" id="bookDetailLastRead" type="button" data-detail-action="jump" hidden>
         ${icon('read')}<span class="detail-last-read-label">최근 읽은 회차</span><span class="detail-last-read-title" id="bookDetailLastReadTitle"></span><svg class="detail-last-read-next" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
       </button>
@@ -108,6 +110,9 @@
   }
   function sameId(a, b) { return a != null && b != null && String(a) === String(b); }
   function chapterTitle(chapter) { return String(chapter?.title || chapter?.name || '제목 없는 회차'); }
+  function episodeNumber(chapter, index) {
+    return Number.isSafeInteger(chapter?.episodeNumber) && chapter.episodeNumber > 0 ? chapter.episodeNumber : index + 1;
+  }
   function timestamp(value) {
     const time = typeof value === 'number' ? value : Date.parse(value || '');
     return Number.isFinite(time) && time > 0 ? time : 0;
@@ -190,6 +195,7 @@
     $('bookDetailContinue').setAttribute('aria-label', (book?.hasRead ? '이어보기, ' : '첫 화 보기, ') + $('bookDetailContinueChapter').textContent);
     $('bookDetailSort').disabled = !state.ready || state.chapters.length < 2;
     $('bookDetailSearchToggle').disabled = !state.ready || !state.chapters.length;
+    renderTitleSync();
     renderRows();
     renderInfo();
     updateTab();
@@ -198,6 +204,24 @@
       newBookPending = false;
     }
     measureHeader();
+  }
+
+  function renderTitleSync() {
+    const sync = state.titleSync || {};
+    const loading = Boolean(sync.loading);
+    const online = sync.online !== false && navigator.onLine !== false;
+    const button = $('bookDetailTitleSync');
+    button.textContent = state.hasEpisodeTitles ? '제목 새로고침' : '제목 불러오기';
+    button.disabled = !state.ready || !state.book || loading || !online;
+    button.title = !online ? '인터넷에 연결한 뒤 회차 제목을 불러올 수 있습니다.' : loading ? '회차 제목을 불러오고 있습니다.' : '';
+    const status = $('bookDetailTitleSyncStatus');
+    const message = typeof sync.message === 'string' ? sync.message.trim() : '';
+    const error = typeof sync.error === 'string' ? sync.error.trim() : '';
+    status.textContent = loading ? message || '회차 제목을 불러오고 있습니다.' : message || error || (sync.error ? '회차 제목을 불러오지 못했습니다. 다시 시도해 주세요.' : '');
+    status.hidden = !status.textContent;
+    status.classList.toggle('is-error', Boolean(sync.error) && !loading);
+    status.classList.toggle('is-loading', loading);
+    $('bookDetailEpisodesPanel').setAttribute('aria-busy', String(loading));
   }
 
   function createRow() {
@@ -240,7 +264,7 @@
     else row.button.removeAttribute('aria-current');
     row.button.setAttribute('aria-label', title + (isCurrent ? ', 읽던 회차, ' + Math.round(ratio * 100) + '%' : isRead ? ', 읽은 회차' : ', 읽기'));
     setCover(row.cover, state.book);
-    row.number.textContent = /^\s*\d+\s*화(?:\s|[:.·-]|$)/.test(title) ? '' : `${index + 1}화`;
+    row.number.textContent = /^\s*\d+\s*화(?:\s|[:.·-]|$)/.test(title) ? '' : `${episodeNumber(chapter, index)}화`;
     row.name.textContent = title;
     row.meta.textContent = [formatSize(chapter.bytes), dateLabel(chapter.addedAt)].filter(Boolean).join(' · ');
     row.statusLabel.textContent = isCurrent ? '이어서' : isRead ? '다시 보기' : '읽기';
@@ -250,7 +274,7 @@
 
   function renderRows() {
     const query = searchQuery.trim().toLocaleLowerCase('ko');
-    let chapters = state.chapters.map((chapter, index) => ({ chapter, index })).filter(({ chapter, index }) => !query || chapterTitle(chapter).toLocaleLowerCase('ko').includes(query) || `${index + 1}화`.includes(query));
+    let chapters = state.chapters.map((chapter, index) => ({ chapter, index })).filter(({ chapter, index }) => !query || chapterTitle(chapter).toLocaleLowerCase('ko').includes(query) || `${episodeNumber(chapter, index)}화`.includes(query));
     if (latestFirst) chapters = chapters.reverse();
     const count = $('bookDetailResultCount');
     count.replaceChildren(document.createTextNode(query ? '검색 결과 ' : '전체 '), element('span', '', chapters.length.toLocaleString('ko-KR')), document.createTextNode('화'));
@@ -390,6 +414,7 @@
     if (action === 'back') runAction('back');
     else if (action === 'search') setSearch(!searchOpen);
     else if (action === 'clear-search') setSearch(false);
+    else if (action === 'refresh-titles' && state.book) runAction('refreshTitles', state.book.name);
     else if (action === 'sort') { latestFirst = !latestFirst; renderRows(); }
     else if (action === 'episodes-tab' || action === 'info-tab') {
       selectedTab = action === 'episodes-tab' ? 'episodes' : 'info';
@@ -411,5 +436,7 @@
     $(selectedTab === 'episodes' ? 'bookDetailEpisodesTab' : 'bookDetailInfoTab').focus();
   });
   window.addEventListener('resize', measureHeader, { passive: true });
+  window.addEventListener('online', renderTitleSync);
+  window.addEventListener('offline', renderTitleSync);
   if (typeof ResizeObserver === 'function') new ResizeObserver(measureHeader).observe($('bookDetailHeader'));
 })();

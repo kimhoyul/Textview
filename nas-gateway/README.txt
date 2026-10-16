@@ -3,7 +3,8 @@ Textview NAS 연결 서버
 업로드 위치
 /volume1/web/NASDownloader/textview-nas/
 
-이 폴더의 api.php, synology.php, config.php를 위 위치에 함께 업로드하세요.
+처음 설치할 때 이 폴더의 api.php, synology.php, cover-search.php, episode-titles.php, config.php를 함께 복사하세요.
+업데이트할 때는 기존 config.php를 유지하고 나머지 네 PHP 파일을 함께 복사하세요.
 기존 Web Station의 PHP 8.4 프로필을 사용하세요.
 PHP cURL과 세션 기능을 켜 두세요.
 다른 Textview 파일을 이 서버 폴더에 넣을 필요는 없습니다.
@@ -14,6 +15,7 @@ https://chhc007.synology.me:9444/textview-nas/api.php
 업로드 후 실행 확인 주소
 https://chhc007.synology.me:9444/textview-nas/api.php?health=1
 이 주소를 브라우저에서 열면 ready, php, curl, session, gatewayVersion을 확인할 수 있습니다.
+표지 검색은 coverSearch: true, 회차 제목 조회는 episodeTitles: true로 확인합니다.
 gatewayVersion: nas4는 업로드한 서버 코드 버전입니다. 실제 NAS 승인 로그인 성공을 뜻하지 않습니다.
 이 확인 요청은 로그인, NAS 조회, 세션 생성, 임시 파일 생성을 하지 않습니다.
 
@@ -155,7 +157,7 @@ proofPresent, typesPresent: true 또는 false
 비밀번호, OTP, 계정 이름, 요청 ID, 증명 토큰, 승인 토큰, SID, 원문 응답은 진단 정보에서 제외합니다.
 
 확인 순서
-1. 세 PHP 파일을 업로드합니다.
+1. 위 설치 항목의 PHP 파일을 함께 복사합니다. 업데이트 시 config.php는 유지합니다.
 2. Textview NAS 화면의 연결 주소를 위 api.php 주소로 설정합니다.
 3. 연결 확인을 실행합니다. bootstrap은 DSM 계정 로그인을 하지 않습니다.
 4. NAS 로그인과 OTP를 확인합니다.

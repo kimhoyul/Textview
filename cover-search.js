@@ -137,6 +137,7 @@
     let results = [];
     let primaryError = null;
     const metadata = rows => rows.filter(item => item && typeof item.title === 'string').map(item => ({
+      ...(/^series:[1-9][0-9]{0,11}$/.test(typeof item.id === 'string' ? item.id : '') ? { id: item.id } : {}),
       title: item.title,
       author: Array.isArray(item.author) ? item.author.filter(name => typeof name === 'string').join(', ') : typeof item.author === 'string' ? item.author : '',
       sourceName: typeof item.sourceName === 'string' ? item.sourceName : ''
