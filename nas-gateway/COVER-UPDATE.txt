@@ -3,20 +3,21 @@
 업로드 위치
 /volume1/web/NASDownloader/textview-nas/
 
-업로드할 파일 4개
+업로드할 파일 5개
 api.php
 synology.php
 cover-search.php
 episode-titles.php
+episode-rename.php
 
-네 파일을 위 폴더에 함께 복사하고 같은 이름의 파일을 덮어쓰세요.
+다섯 파일을 위 폴더에 함께 복사하고 같은 이름의 파일을 덮어쓰세요.
 기존 config.php는 그대로 사용합니다. ZIP에는 config.php가 없습니다.
 앱과 TXT 파일은 이 폴더에 올릴 필요가 없습니다.
 
 설치 확인 주소
 https://chhc007.synology.me:9444/textview-nas/api.php?health=1
 
-정상 응답에는 ready: true와 coverSearch: true가 표시됩니다.
+정상 응답에는 ready: true, coverSearch: true, episodeTitles: true, episodeRename: true가 표시됩니다.
 gatewayVersion은 기존 config.php 값에 따라 이전 번호로 표시될 수 있습니다.
 coverSearch가 이번 표지 검색 설치 확인 값입니다.
 coverSearch가 false면 Web Station의 PHP 프로필에서 DOM 확장을 확인하세요.

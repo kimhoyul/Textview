@@ -34,6 +34,11 @@
   const episodeTitleStatus = new Map();
   const episodeTitleGeneration = new Map();
   const episodeTitleRetryAfter = new Map();
+  const pendingNASNames = new Set();
+  const nasNameRetryAfter = new Map();
+  const nasOriginJobs = new Map();
+  let nasNameSyncRunning = false;
+  let nasNameSyncWake = false;
   let homeError = '';
   let settings = { ...DEFAULTS };
   let busy = false;
@@ -192,6 +197,7 @@
     $('deleteBookBtn').disabled = busy || !db || inBook($('bookSelect').value).length === 0;
     updateNavigation();
     renderHome();
+    if (!busy) void drainNASNameSync();
   }
 
   function storedCover(book) {
@@ -213,10 +219,13 @@
   }
 
   function episodeNumber(chapter) {
-    return window.TextviewEpisodeTitleModel?.numberFor(chapter.name, chapter.book) ?? null;
+    const model = window.TextviewEpisodeTitleModel;
+    return model?.numberFor(chapter.name, chapter.book) ?? model?.namedFor(chapter.name)?.number ?? null;
   }
 
   function displayChapterTitle(chapter, withNumber = false) {
+    const named = window.TextviewEpisodeTitleModel?.namedFor(chapter.name);
+    if (named) return withNumber ? `${named.number}화 · ${named.title}` : named.title;
     const number = episodeNumber(chapter);
     const title = number && episodeInfo(chapter.book)?.titles.get(number);
     return title ? (withNumber ? `${number}화 · ${title}` : title) : cleanName(chapter.name);
@@ -227,8 +236,9 @@
     if (!force && Date.now() < (episodeTitleRetryAfter.get(book) || 0)) return;
     const list = inBook(book);
     if (!list.length) return;
-    const numbers = [...new Set(list.map(episodeNumber).filter(Boolean))];
+    const numbers = [...new Set(list.map(chapter => window.TextviewEpisodeTitleModel.numberFor(chapter.name, chapter.book)).filter(Boolean))];
     if (!numbers.length) {
+      queueNASNameSync(book);
       if (force) { episodeTitleStatus.set(book, { message: '숫자로 된 회차 파일이 없습니다.' }); renderBookDetail(); }
       return;
     }
@@ -241,7 +251,7 @@
     const cached = saved && window.TextviewEpisodeTitleModel.titleKey(saved.title) === window.TextviewEpisodeTitleModel.titleKey(book) &&
       (!model.author || window.TextviewEpisodeTitleModel.authorKey(model.author) === window.TextviewEpisodeTitleModel.authorKey(saved.author)) ? saved : null;
     const fresh = cached && cached.checkedAt > Date.now() - 24 * 60 * 60 * 1000;
-    if (!force && fresh && numbers.every(number => cached.titles.has(number) || cached.pages.includes(Math.floor((number - 1) / 30) + 1))) return;
+    if (!force && fresh && numbers.every(number => cached.titles.has(number) || cached.pages.includes(Math.floor((number - 1) / 30) + 1))) { queueNASNameSync(book); return; }
     const job = {};
     const generation = episodeTitleGeneration.get(book) || 0;
     episodeTitleJobs.set(book, job);
@@ -292,7 +302,141 @@
         episodeTitleJobs.delete(book);
         if (episodeTitleStatus.get(book)?.loading) { episodeTitleStatus.set(book, {}); renderBookDetail(); }
       }
+      queueNASNameSync(book);
     }
+  }
+
+  function normalizedNASOrigin(book, source) {
+    if (!source || typeof source.endpoint !== 'string' || typeof source.folder !== 'string' || !window.TextviewNAS?.getEndpoint) return null;
+    try {
+      const url = new URL(source.endpoint);
+      if (url.href !== window.TextviewNAS.getEndpoint() || url.username || url.password || url.search || url.hash ||
+          !(url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) return null;
+      const folder = source.folder;
+      if (!folder.startsWith('/') || folder.endsWith('/') || folder.length > 4096 || /[\\\u0000-\u001f\u007f]/.test(folder) || folder.split('/').slice(1).some(part => !part || part === '.' || part === '..')) return null;
+      const model = window.TextviewEpisodeTitleModel;
+      if (!model || model.titleKey(folder.split('/').pop()) !== model.titleKey(book)) return null;
+      return { endpoint: url.href, folder, syncedKey: typeof source.syncedKey === 'string' && source.syncedKey.length <= 8192 ? source.syncedKey : '' };
+    } catch { return null; }
+  }
+
+  function nasOrigin(book) {
+    const value = memoryState.get('nas-origin:' + book)?.value;
+    return normalizedNASOrigin(book, value) ? value : null;
+  }
+
+  async function bindNASOrigin(book, source, replace = false) {
+    const pending = nasOriginJobs.get(book);
+    if (pending) { await pending; return bindNASOrigin(book, source, replace); }
+    let release;
+    const lock = new Promise(resolve => { release = resolve; });
+    nasOriginJobs.set(book, lock);
+    try {
+    const safe = normalizedNASOrigin(book, source);
+    if (!db || !inBook(book).length || !safe) return false;
+    const old = nasOrigin(book);
+    if (old && old.folder !== safe.folder && !replace) return false;
+    if (old && old.endpoint === safe.endpoint && old.folder === safe.folder && (!replace || !old.syncedKey)) { queueNASNameSync(book); return true; }
+    const generation = episodeTitleGeneration.get(book) || 0;
+    const record = { key: 'nas-origin:' + book, value: { ...safe, syncedKey: '' }, updatedAt: Date.now() };
+    await dbRequest('state', 'put', record);
+    if (!db || !inBook(book).length || (episodeTitleGeneration.get(book) || 0) !== generation) return false;
+    memoryState.set(record.key, record);
+    nasNameRetryAfter.delete(book);
+    queueNASNameSync(book);
+    return true;
+    } finally { if (nasOriginJobs.get(book) === lock) nasOriginJobs.delete(book); release(); }
+  }
+
+  function nasNamesKey(book, info) {
+    return `${memoryState.get('episode-titles:' + book)?.updatedAt || 0}:${info.productId}:${info.pages.join(',')}`;
+  }
+
+  function queueNASNameSync(book) {
+    if (!db || !inBook(book).length || !nasOrigin(book) || !episodeInfo(book)) return;
+    pendingNASNames.add(book);
+    if (nasNameSyncRunning) nasNameSyncWake = true;
+    if (!nasNameSyncRunning && !window.TextviewNAS?.canSyncEpisodeNames?.() && nasOrigin(book).syncedKey !== nasNamesKey(book, episodeInfo(book))) {
+      const previous = episodeTitleStatus.get(book) || {};
+      const nasMessage = 'NAS에 연결하면 파일 이름에도 반영합니다.';
+      if (previous.nasMessage !== nasMessage) { episodeTitleStatus.set(book, { ...previous, nasMessage }); renderBookDetail(); }
+    }
+    void drainNASNameSync();
+  }
+
+  async function drainNASNameSync() {
+    const nas = window.TextviewNAS;
+    if (nasNameSyncRunning || !db || busy || !navigator.onLine || !nas?.canSyncEpisodeNames?.()) return;
+    nasNameSyncRunning = true;
+    try {
+      for (const book of [...pendingNASNames]) {
+        if (!db || busy || !navigator.onLine || !nas.canSyncEpisodeNames()) break;
+        if (episodeTitleJobs.has(book) || Date.now() < (nasNameRetryAfter.get(book) || 0)) continue;
+        const origin = nasOrigin(book), info = episodeInfo(book);
+        if (!origin || !info || !inBook(book).length) { pendingNASNames.delete(book); continue; }
+        const pages = [...new Set([...info.pages, ...info.episodes.map(item => Math.ceil(item.number / 30))])].sort((a, b) => a - b);
+        if (!pages.length) continue;
+        const key = nasNamesKey(book, info);
+        if (origin.syncedKey === key) { pendingNASNames.delete(book); continue; }
+        const generation = episodeTitleGeneration.get(book) || 0;
+        const valid = () => !!db && inBook(book).length && nasOrigin(book) === origin && (episodeTitleGeneration.get(book) || 0) === generation && episodeInfo(book) && nasNamesKey(book, episodeInfo(book)) === key;
+        const status = text => { if (valid()) { episodeTitleStatus.set(book, { ...episodeTitleStatus.get(book), nasMessage: text }); renderBookDetail(); } };
+        status('NAS 파일 이름에 회차 제목을 반영하는 중…');
+        try {
+          const result = await nas.syncEpisodeNames({ folder: origin.folder, productId: info.productId, title: info.title, author: info.author, pages });
+          if (!valid()) continue;
+          if (!result) { status('NAS 로그인 후 파일 이름에 반영합니다.'); break; }
+          if (result.unsupported || result.error || result.cancelled) throw new Error(result.unsupported ? 'NAS 연결 파일을 업데이트한 뒤 다시 연결해 주세요.' : result.error === 'SESSION_EXPIRED' ? 'NAS 로그인 후 파일 이름에 반영합니다.' : 'NAS 파일 이름을 반영하지 못했습니다. 다시 연결하면 재시도합니다.');
+          if (result.conflicts || result.skipped) {
+            status(`NAS 파일 ${result.renamed || 0}개 이름 반영 · 중복 또는 확인이 필요한 파일은 유지했습니다.`);
+            nasNameRetryAfter.set(book, Date.now() + 5 * 60 * 1000);
+            continue;
+          }
+          const record = { key: 'nas-origin:' + book, value: { ...origin, syncedKey: key }, updatedAt: Date.now() };
+          await dbRequest('state', 'put', record);
+          if (!valid()) continue;
+          memoryState.set(record.key, record);
+          pendingNASNames.delete(book);
+          nasNameRetryAfter.delete(book);
+          episodeTitleStatus.set(book, { ...episodeTitleStatus.get(book), nasMessage: result.renamed ? `NAS 파일 ${result.renamed}개 이름을 반영했습니다.` : 'NAS 파일 이름에 회차 제목이 반영되어 있습니다.' });
+          renderBookDetail();
+          if (result.renamed) showToast(`${book} · NAS 파일 ${result.renamed}개 이름을 반영했습니다.`);
+        } catch (error) {
+          if (valid()) { nasNameRetryAfter.set(book, Date.now() + 5 * 60 * 1000); status(explainError(error)); }
+        }
+      }
+    } finally {
+      nasNameSyncRunning = false;
+      if (nasNameSyncWake) { nasNameSyncWake = false; queueMicrotask(() => { void drainNASNameSync(); }); }
+    }
+  }
+
+  function nasIdle() {
+    for (const book of new Set(chapters.map(chapter => chapter.book))) queueNASNameSync(book);
+  }
+  function nasConnected() {
+    nasNameRetryAfter.clear();
+    nasIdle();
+  }
+  async function nasFolderLoaded(source) {
+    for (const book of new Set(chapters.map(chapter => chapter.book))) {
+      const origin = nasOrigin(book), safe = normalizedNASOrigin(book, source);
+      if (safe && (!origin || (origin.endpoint === safe.endpoint && origin.folder === safe.folder))) {
+        try { await bindNASOrigin(book, source, Boolean(origin)); } catch { showToast('NAS 원본 폴더를 저장하지 못했습니다. 다시 열어 주세요.'); }
+      }
+    }
+  }
+
+  async function nasAlias(book, file, decoded) {
+    const model = window.TextviewEpisodeTitleModel;
+    if (!model?.namedFor) return null;
+    const named = model.namedFor(file.name);
+    const number = named?.number ?? model.numberFor(file.name, book);
+    if (!number) return null;
+    const candidates = inBook(book).filter(chapter => episodeNumber(chapter) === number);
+    if (candidates.length !== 1 || candidates[0].name === file.name || Boolean(model.namedFor(candidates[0].name)) === Boolean(named)) return null;
+    const stored = await dbRequest('texts', 'get', candidates[0].id);
+    return stored?.text === decoded.text ? candidates[0] : null;
   }
 
   function coverCredits(value) {
@@ -1001,9 +1145,13 @@
             if (known.has(id)) { skipped++; details.push(file.name + ': 같은 책에 같은 파일명이 있어 건너뜀'); }
             else {
               const decoded = await decodeFile(file, encoding);
-              await saveChapter({ id, book, name: file.name, bytes: file.size, encoding: decoded.encoding, addedAt: Date.now() }, decoded.text);
-              known.add(id);
-              added++;
+              const alias = options.nasAlias ? await nasAlias(book, file, decoded) : null;
+              if (alias) { skipped++; details.push(file.name + ': 파일명만 다른 같은 회차가 있어 건너뜀'); }
+              else {
+                await saveChapter({ id, book, name: file.name, bytes: file.size, encoding: decoded.encoding, addedAt: Date.now() }, decoded.text);
+                known.add(id);
+                added++;
+              }
             }
           }
         } catch (error) {
@@ -1034,11 +1182,17 @@
     return { added, skipped, failed, details };
   }
 
-  async function importDownloaded(files, bookName) {
+  async function importDownloaded(files, bookName, source = null) {
     if (!db || busy || switching || suppressPosition) throw new Error('서재에 추가할 수 없습니다. 잠시 후 다시 시도해 주세요.');
     if (!Array.isArray(files) || !files.length || typeof bookName !== 'string') throw new Error('TXT 파일과 책 이름을 확인해 주세요.');
     if (files.some(file => !(file instanceof File) || !/\.txt$/i.test(file.name) || file.size > MAX_FILE_BYTES)) throw new Error('32 MB 이하의 TXT 파일만 추가할 수 있습니다.');
-    return importFiles(files, { bookName, encoding: 'auto' });
+    const result = await importFiles(files, { bookName, encoding: 'auto', nasAlias: true });
+    if (source && (result.added || result.skipped)) {
+      const book = (bookName.trim() || '내 책').normalize('NFC').slice(0, 100);
+      try { await bindNASOrigin(book, source, true); }
+      catch { showToast('TXT는 저장했습니다. NAS 원본 폴더는 다시 연결할 때 저장합니다.'); }
+    }
+    return result;
   }
 
   async function deleteBook() {
@@ -1048,6 +1202,9 @@
     if (!list.length || !confirm('“' + book + '”의 TXT ' + list.length + '개를 앱 책장에서 삭제할까요?\n파일 앱에 있는 원본은 삭제하지 않습니다.')) return;
     savePosition();
     setBusy(true);
+    episodeTitleGeneration.set(book, (episodeTitleGeneration.get(book) || 0) + 1);
+    pendingNASNames.delete(book);
+    nasNameRetryAfter.delete(book);
     try {
       await new Promise((resolve, reject) => {
         const tx = db.transaction(['chapters', 'texts', 'state'], 'readwrite');
@@ -1059,6 +1216,7 @@
         }
         tx.objectStore('state').delete('cover:' + book);
         tx.objectStore('state').delete('episode-titles:' + book);
+        tx.objectStore('state').delete('nas-origin:' + book);
         tx.oncomplete = resolve;
         tx.onabort = () => reject(tx.error);
         tx.onerror = () => {};
@@ -1071,7 +1229,9 @@
       }
       memoryState.delete('cover:' + book);
       memoryState.delete('episode-titles:' + book);
-      episodeTitleGeneration.set(book, (episodeTitleGeneration.get(book) || 0) + 1);
+      memoryState.delete('nas-origin:' + book);
+      pendingNASNames.delete(book);
+      nasNameRetryAfter.delete(book);
       episodeTitleJobs.delete(book);
       episodeTitleStatus.delete(book);
       episodeTitleRetryAfter.delete(book);
@@ -1363,7 +1523,7 @@
     openBook: showCoverPicker, manageBook: openLibrary, openImport: () => openImport(), openHelp,
     showHome, notify: showToast
   };
-  if (window.TextviewNAS) window.TextviewNAS.actions = { showHome, showShelf, importDownloaded, notify: showToast };
+  if (window.TextviewNAS) window.TextviewNAS.actions = { showHome, showShelf, importDownloaded, nasIdle, nasConnected, nasFolderLoaded, notify: showToast };
   if (window.TextviewBookDetail) window.TextviewBookDetail.actions = {
     back: backFromBookDetail, openChapter, notify: showToast, refreshTitles: book => updateEpisodeTitles(book, true)
   };
@@ -1430,7 +1590,7 @@
     lastWidth = innerWidth;
     if (readingActive && current && !switching) void changeSettings(() => {});
   });
-  window.addEventListener('online', () => { void checkOffline(); renderHome(); if (detailActive && detailBookName) void updateEpisodeTitles(detailBookName); else if (readingActive && current) void updateEpisodeTitles(current.book); });
+  window.addEventListener('online', () => { void checkOffline(); renderHome(); nasConnected(); if (detailActive && detailBookName) void updateEpisodeTitles(detailBookName); else if (readingActive && current) void updateEpisodeTitles(current.book); });
   window.addEventListener('offline', () => { renderOfflineStatus(); renderBookDetail(); });
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 

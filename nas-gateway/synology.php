@@ -291,7 +291,10 @@ final class SynologyClient
 
     private function version(string $api): int
     {
-        if (!isset($this->apis[$api])) { $this->discover($api === 'SYNO.SecureSignIn.Authenticator.Request'); }
+        if (!isset($this->apis[$api])) {
+            if ($api === 'SYNO.FileStation.Rename') { $this->discoverEpisodeRename(); }
+            else { $this->discover($api === 'SYNO.SecureSignIn.Authenticator.Request'); }
+        }
         $info = $this->apis[$api];
         $min = (int)$info['minVersion'];
         $max = (int)$info['maxVersion'];
@@ -306,6 +309,27 @@ final class SynologyClient
         }
         if ($min > 2 || $max < 2) { throw nas_error('NAS_UNREACHABLE'); }
         return 2;
+    }
+
+    /** Renaming is discovered only for the authenticated episode-name operation. */
+    private function discoverEpisodeRename(): void
+    {
+        if ($this->sid === null) { throw nas_error('SESSION_EXPIRED'); }
+        $response = $this->transport->post($this->baseUrl . '/webapi/entry.cgi', [
+            'api' => 'SYNO.API.Info', 'version' => '1', 'method' => 'query', 'query' => 'SYNO.FileStation.Rename',
+        ], [], (int)$this->config['max_json_bytes'], (int)$this->config['api_timeout']);
+        try {
+            $body = $response->json((int)$this->config['max_json_bytes']);
+            $item = $body['data']['SYNO.FileStation.Rename'] ?? null;
+            if ($response->httpStatus !== 200 || ($body['success'] ?? false) !== true || !is_array($item)
+                || !is_int($item['minVersion'] ?? null) || !is_int($item['maxVersion'] ?? null)
+                || $item['minVersion'] < 1 || $item['minVersion'] > 2 || $item['maxVersion'] < 2 || $item['maxVersion'] > 999
+                || !is_string($item['path'] ?? null)
+                || preg_match('#^(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.cgi$#D', $item['path']) !== 1) {
+                throw nas_error('NAS_UNREACHABLE');
+            }
+            $this->apis['SYNO.FileStation.Rename'] = $item;
+        } finally { $response->close(); }
     }
 
     private function request(string $api, string $method, array $params, bool $authenticate, bool $download = false, ?int $timeout = null): SynologyResponse
@@ -568,6 +592,104 @@ final class SynologyClient
             throw nas_error('FORBIDDEN');
         }
         return ['path' => $path, 'name' => basename($path), 'size' => $size];
+    }
+
+    /** DSM, rather than the PHP process account, authorizes every metadata read. */
+    public function episodeRenameInfo(string $path): ?array
+    {
+        self::validatePath($path, false);
+        $response = $this->request('SYNO.FileStation.List', 'getinfo', ['path' => [$path], 'additional' => ['size', 'time', 'perm']], true);
+        try {
+            $body = $response->json((int)$this->config['max_json_bytes']);
+            if (($body['success'] ?? false) !== true) {
+                if ((int)($body['error']['code'] ?? 0) === 408) { return null; }
+                self::checkApiResult($body);
+            }
+            if ($response->httpStatus !== 200) { throw nas_error('NAS_UNREACHABLE'); }
+            $item = $body['data']['files'][0] ?? null;
+            if (is_array($item) && (int)($item['code'] ?? 0) === 408 && ($item['path'] ?? null) === $path) { return null; }
+            if (!is_array($item) || ($item['path'] ?? null) !== $path || ($item['name'] ?? null) !== basename($path)
+                || !is_bool($item['isdir'] ?? null) || isset($item['code'])) { throw nas_error('FORBIDDEN'); }
+            $perm = $item['additional']['perm'] ?? [];
+            if (($perm['share_right'] ?? '') === 'RO' || ($perm['acl']['read'] ?? true) === false) { throw nas_error('FORBIDDEN'); }
+            return $item;
+        } finally { $response->close(); }
+    }
+
+    /** A bounded, non-recursive snapshot detects duplicate numeric files even if omitted by a caller. */
+    public function episodeRenameEntries(string $folder): array
+    {
+        self::validatePath($folder, false);
+        $info = $this->episodeRenameInfo($folder);
+        if ($info === null || $info['isdir'] !== true) { throw nas_error('FORBIDDEN'); }
+        $entries = [];
+        $offset = 0;
+        do {
+            $data = $this->jsonRequest('SYNO.FileStation.List', 'list', ['folder_path' => $folder, 'offset' => $offset,
+                'limit' => 1000, 'sort_by' => 'name', 'sort_direction' => 'asc', 'additional' => ['size', 'time']], true);
+            $raw = $data['files'] ?? null;
+            $total = $data['total'] ?? null;
+            if (!is_int($total) || $total < 0 || $total > 10000 || !is_array($raw) || !array_is_list($raw)
+                || count($raw) > 1000 || ($raw === [] && $offset < $total)) { throw nas_error('INVALID_REQUEST'); }
+            foreach ($raw as $item) {
+                if (!is_array($item) || !is_string($item['path'] ?? null) || !is_string($item['name'] ?? null)
+                    || !is_bool($item['isdir'] ?? null)) { throw nas_error('NAS_UNREACHABLE'); }
+                self::validatePath($item['path'], false);
+                if (dirname($item['path']) !== $folder || basename($item['path']) !== $item['name']) { throw nas_error('FORBIDDEN'); }
+                if ($item['isdir'] === false && self::isTxtPath($item['path'])) { $entries[$item['path']] = $item; }
+            }
+            $offset += count($raw);
+        } while ($offset < $total && $offset < 10000);
+        return $entries;
+    }
+
+    /** Only the verified episode helper calls this; there is no general rename API route. */
+    public function renameEpisodeFile(string $path, string $name, ?array $snapshot = null): array
+    {
+        self::validatePath($path, false);
+        if (!self::isTxtPath($path) || preg_match('/^[1-9][0-9]{0,4}화 [^\\\\\/:*?"<>|\p{Cc}]+\.txt$/uD', $name) !== 1
+            || strlen($name) > 240 || str_ends_with($name, ' .txt')) { throw nas_error('INVALID_REQUEST'); }
+        $target = dirname($path) . '/' . $name;
+        self::validatePath($target, false);
+        $source = $this->episodeRenameInfo($path);
+        if ($source === null) {
+            $existing = $this->episodeRenameInfo($target);
+            return ['status' => $existing !== null && $existing['isdir'] === false ? 'unchanged' : 'missing', 'newPath' => $target];
+        }
+        if ($source['isdir'] !== false) { throw nas_error('FORBIDDEN'); }
+        if (!is_int($source['additional']['size'] ?? null) || $source['additional']['size'] < 0) { throw nas_error('NAS_UNREACHABLE'); }
+        if ($path === $target) { return ['status' => 'unchanged', 'newPath' => $target]; }
+        if ($snapshot === null) { return ['status' => 'skipped', 'reason' => 'source_changed', 'newPath' => $target]; }
+        if (!is_int($snapshot['additional']['size'] ?? null) || $snapshot['additional']['size'] < 0
+            || !is_int($snapshot['additional']['time']['mtime'] ?? null) || $snapshot['additional']['time']['mtime'] < 0
+            || !is_int($source['additional']['time']['mtime'] ?? null) || $source['additional']['time']['mtime'] < 0) { throw nas_error('NAS_UNREACHABLE'); }
+        if ($snapshot['additional']['size'] !== $source['additional']['size']
+            || $snapshot['additional']['time']['mtime'] !== $source['additional']['time']['mtime']) {
+            return ['status' => 'skipped', 'reason' => 'source_changed', 'newPath' => $target];
+        }
+        if ($this->episodeRenameInfo($target) !== null) { return ['status' => 'conflict', 'reason' => 'target_exists', 'newPath' => $target]; }
+        $response = $this->request('SYNO.FileStation.Rename', 'rename', ['path' => [$path], 'name' => [$name], 'additional' => ['size', 'time']], true);
+        try {
+            $body = $response->json((int)$this->config['max_json_bytes']);
+            if (($body['success'] ?? false) !== true) {
+                $codes = [(int)($body['error']['code'] ?? 0)];
+                foreach (array_slice(is_array($body['error']['errors'] ?? null) ? $body['error']['errors'] : [], 0, 30) as $error) {
+                    if (is_array($error)) { $codes[] = (int)($error['code'] ?? 0); }
+                }
+                if (array_intersect($codes, [106, 107, 119]) !== []) { throw nas_error('SESSION_EXPIRED'); }
+                if (in_array(414, $codes, true)) { return ['status' => 'conflict', 'reason' => 'target_exists', 'newPath' => $target]; }
+                if (array_intersect($codes, [105, 403, 404, 405, 407, 411]) !== []) {
+                    return ['status' => 'skipped', 'reason' => 'permission_denied', 'newPath' => $target];
+                }
+                if (in_array(408, $codes, true)) { return ['status' => 'missing', 'newPath' => $target]; }
+                throw nas_error('NAS_UNREACHABLE');
+            }
+            $item = $body['data']['files'][0] ?? null;
+            if ($response->httpStatus !== 200 || !is_array($item) || ($item['path'] ?? null) !== $target
+                || ($item['name'] ?? null) !== $name || ($item['isdir'] ?? null) !== false || isset($item['code'])
+                || ($item['additional']['size'] ?? null) !== ($source['additional']['size'] ?? null)) { throw nas_error('NAS_UNREACHABLE'); }
+            return ['status' => 'renamed', 'newPath' => $target];
+        } finally { $response->close(); }
     }
 
     public function download(string $path): SynologyResponse

@@ -217,7 +217,9 @@
     const status = $('bookDetailTitleSyncStatus');
     const message = typeof sync.message === 'string' ? sync.message.trim() : '';
     const error = typeof sync.error === 'string' ? sync.error.trim() : '';
+    const nasMessage = typeof sync.nasMessage === 'string' ? sync.nasMessage.trim() : '';
     status.textContent = loading ? message || '회차 제목을 불러오고 있습니다.' : message || error || (sync.error ? '회차 제목을 불러오지 못했습니다. 다시 시도해 주세요.' : '');
+    if (!loading && nasMessage) status.textContent = [status.textContent, nasMessage].filter(Boolean).join(' ');
     status.hidden = !status.textContent;
     status.classList.toggle('is-error', Boolean(sync.error) && !loading);
     status.classList.toggle('is-loading', loading);

@@ -5,6 +5,7 @@
   const DEFAULT_ENDPOINT = 'https://chhc007.synology.me:9444/textview-nas/api.php';
   const MAX_FILE_BYTES = 32 * 1024 * 1024;
   const PAGE_LIMIT = 100;
+  const NAME_SYNC_MAX_ENTRIES = 10000;
   const paths = {
     back: '<path d="m15 5-7 7 7 7"/>',
     next: '<path d="m9 5 7 7-7 7"/>',
@@ -118,8 +119,11 @@
   let locationReturnFocus = null;
   let transferWasActive = false;
   let approvalCountdownTimer = 0;
+  let nameSyncHealth = null;
+  let idleTimer = 0;
+  let pendingConnected = false;
   const selected = new Map();
-  const api = { actions: {}, render, show, hide, setEndpoint, getEndpoint: () => endpoint };
+  const api = { actions: {}, render, show, hide, setEndpoint, getEndpoint: () => endpoint, canSyncEpisodeNames, syncEpisodeNames };
   window.TextviewNAS = api;
 
   class NASError extends Error {
@@ -174,6 +178,16 @@
     try { Promise.resolve(action(...args)).catch(() => notify('요청을 처리하지 못했습니다.')); }
     catch (_) { notify('요청을 처리하지 못했습니다.'); }
   }
+  function scheduleIdle() {
+    clearTimeout(idleTimer);
+    const generation = sequence;
+    idleTimer = setTimeout(() => {
+      idleTimer = 0;
+      if (generation !== sequence || !canSyncEpisodeNames()) return;
+      if (pendingConnected) { pendingConnected = false; runAction('nasConnected'); }
+      if (canSyncEpisodeNames()) runAction('nasIdle');
+    }, 0);
+  }
 
   function clearSecrets(clearUsername = false) {
     $('nasPassword').value = '';
@@ -186,6 +200,8 @@
     authenticated = false;
     sessionExpiresAt = 0;
     bootstrapPromise = null;
+    pendingConnected = false;
+    nameSyncHealth = null;
     currentPath = '/';
     entries = [];
     total = nextOffset = 0;
@@ -371,6 +387,7 @@
     activeController = null;
     busy = '';
     updateView();
+    scheduleIdle();
   }
 
   async function connect() {
@@ -379,6 +396,7 @@
     message();
     $('nasRetry').hidden = true;
     const operation = beginOperation('connect');
+    const wasAuthenticated = authenticated;
     try {
       if (approvalCancelPromise) {
         const cancellation = approvalCancelPromise;
@@ -392,6 +410,7 @@
         if (operation.generation !== sequence) return;
         applySession(data);
         if (!authenticated) throw failure('SESSION_EXPIRED');
+        if (!wasAuthenticated) pendingConnected = true;
       }
     } catch (error) { if (operation.generation === sequence) handleError(error); }
     finally { finishOperation(operation); }
@@ -534,6 +553,7 @@
       entries = [];
       selected.clear();
       success = true;
+      pendingConnected = true;
     } catch (error) {
       if (operation.generation !== sequence) return;
       if (approvalPending) void cancelApproval(false);
@@ -616,6 +636,7 @@
     if (!append) selected.clear();
     message();
     const operation = beginOperation('list');
+    let loaded = false;
     try {
       const data = await fileRequest('list', { path, offset, limit: PAGE_LIMIT }, { signal: operation.controller.signal });
       if (operation.generation !== sequence || operation.controller.signal.aborted) return;
@@ -634,8 +655,184 @@
         window.scrollTo(0, 0);
       }
       renderDirectory();
+      loaded = true;
     } catch (error) { if (operation.generation === sequence) handleError(error); }
     finally { finishOperation(operation); }
+    if (loaded && operation.generation === sequence && path !== '/') runAction('nasFolderLoaded', { folder: path, endpoint });
+  }
+
+  function canSyncEpisodeNames() {
+    return authenticated && !!sessionToken && !!csrfToken && !busy && !importInProgress &&
+      (!sessionExpiresAt || Date.now() < sessionExpiresAt) && window.navigator?.onLine !== false;
+  }
+  function cancelNameSync() {
+    if (busy !== 'name-sync') return;
+    ++sequence;
+    activeController?.abort();
+    activeController = null;
+    busy = '';
+    updateView();
+  }
+
+  function directChild(path, folder) {
+    if (typeof path !== 'string' || typeof folder !== 'string' || folder === '/' || !folder.startsWith('/') || folder.endsWith('/')) return false;
+    if (!path.startsWith(folder + '/')) return false;
+    const name = path.slice(folder.length + 1);
+    return !!name && !/[\\/\u0000-\u001f\u007f]/.test(name) && name !== '.' && name !== '..' && /\.txt$/i.test(name);
+  }
+
+  async function supportsNameSync(operation) {
+    if (nameSyncHealth && nameSyncHealth.endpoint === endpoint && nameSyncHealth.time > Date.now() - 60000) return nameSyncHealth.available;
+    const controller = new AbortController();
+    const signal = operation.controller.signal;
+    const abort = () => controller.abort();
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) controller.abort();
+    const timer = setTimeout(abort, 18000);
+    try {
+      const selectedEndpoint = endpoint;
+      const response = await fetch(selectedEndpoint + '?health=1', {
+        method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'error', signal: controller.signal,
+      });
+      const data = await response.json();
+      if (operation.generation !== sequence || signal.aborted || selectedEndpoint !== endpoint) throw failure('CANCELLED');
+      const available = response.ok && data?.ok === true && data.episodeRename === true;
+      nameSyncHealth = { endpoint, available, time: Date.now() };
+      return available;
+    } catch (error) {
+      if (signal.aborted || operation.generation !== sequence) throw failure('CANCELLED');
+      if (error instanceof NASError) throw error;
+      throw failure('NETWORK_ERROR');
+    } finally { clearTimeout(timer); signal.removeEventListener('abort', abort); }
+  }
+
+  function remapSyncedEntries(results, folder) {
+    const mappings = new Map(results.filter(item => ['renamed', 'unchanged'].includes(item.status) &&
+      directChild(item.oldPath, folder) && directChild(item.newPath, folder)).map(item => [item.oldPath, item.newPath]));
+    if (!mappings.size) return;
+    const remap = entry => {
+      const path = mappings.get(entry.path);
+      return path ? { ...entry, path, name: basename(path) } : entry;
+    };
+    entries = sortEntries(new Map(entries.map(remap).map(entry => [entry.path, entry])).values());
+    const selection = [...selected.values()].map(remap);
+    selected.clear();
+    selection.forEach(entry => selected.set(entry.path, entry));
+    if (currentPath === folder) renderDirectory();
+  }
+
+  async function syncEpisodeNames({ folder, productId, title, author, pages } = {}) {
+    const summary = { renamed: 0, unchanged: 0, skipped: 0, conflicts: 0, results: [] };
+    if (!canSyncEpisodeNames()) return null;
+    const model = window.TextviewEpisodeTitleModel;
+    const safeText = (value, empty = false) => typeof value === 'string' && (empty || !!value.trim()) && [...value].length <= 300 && !/[\u0000-\u001f\u007f]/.test(value);
+    if (!model?.numberFor || typeof folder !== 'string' || folder === '/' || !folder.startsWith('/') || folder.endsWith('/') ||
+        /[\u0000-\u001f\u007f]/.test(folder) || !/^[1-9][0-9]{0,11}$/.test(productId || '') || typeof productId !== 'string' ||
+        !safeText(title) || !safeText(author, true) || !Array.isArray(pages) || pages.length > 334 ||
+        pages.some(page => !Number.isSafeInteger(page) || page < 1 || page > 334)) return { ...summary, error: 'INVALID_REQUEST' };
+    const knownPages = new Set(pages);
+    if (!knownPages.size) return summary;
+    const operation = beginOperation('name-sync');
+    const syncMessage = (text, kind = '') => {
+      if (visible && authenticated && operation.generation === sequence) message(text, kind);
+    };
+    syncMessage('회차 제목을 NAS 파일 이름에 반영하는 중…');
+    const check = () => {
+      if (operation.generation !== sequence || operation.controller.signal.aborted || !authenticated || window.navigator?.onLine === false) throw failure('CANCELLED');
+    };
+    try {
+      if (!await supportsNameSync(operation)) {
+        syncMessage('NAS 연결 파일을 업데이트한 뒤 다시 연결해 주세요.', 'error');
+        return { ...summary, unsupported: true };
+      }
+      const candidates = new Map();
+      const listed = new Map();
+      let cursor = 0, directoryTotal = 1, pageCount = 0;
+      while (cursor < directoryTotal) {
+        check();
+        if (++pageCount > NAME_SYNC_MAX_ENTRIES / PAGE_LIMIT) throw failure('INVALID_REQUEST');
+        const data = await request('list', { path: folder, offset: cursor, limit: PAGE_LIMIT }, { signal: operation.controller.signal });
+        check();
+        const page = directoryPage(data, folder, cursor);
+        if (page.total > NAME_SYNC_MAX_ENTRIES) throw failure('INVALID_REQUEST');
+        for (const entry of page.entries) {
+          if (parentPath(entry.path) === folder && basename(entry.path) === entry.name) listed.set(entry.path, entry);
+          if (!entry.isDir && directChild(entry.path, folder) && basename(entry.path) === entry.name) candidates.set(entry.path, entry);
+        }
+        cursor = page.nextOffset;
+        directoryTotal = page.total;
+        syncMessage(`회차 제목 반영 준비 중 · 파일 목록 ${Math.min(cursor, directoryTotal)} / ${directoryTotal}`);
+      }
+      if (currentPath === folder) {
+        // Renames change the server sort order. Keep the complete scanned list,
+        // so a later “more” request cannot skip files at an old numeric offset.
+        entries = sortEntries(listed.values());
+        total = directoryTotal;
+        nextOffset = cursor;
+        renderDirectory();
+      }
+      const byNumber = new Map();
+      for (const entry of candidates.values()) {
+        const number = model.numberFor(entry.name, title);
+        const named = number ? null : model.namedFor?.(entry.name, title);
+        const found = number || named?.number;
+        if (!found) continue;
+        const group = byNumber.get(found) || [];
+        group.push({ entry, number: found, numeric: !!number });
+        byNumber.set(found, group);
+      }
+      const groups = new Map();
+      for (const [number, sameNumber] of byNumber) {
+        if (!knownPages.has(Math.ceil(number / 30))) continue;
+        const numeric = sameNumber.filter(item => item.numeric);
+        if (sameNumber.length !== 1) { summary.skipped += numeric.length; continue; }
+        if (!numeric.length) { summary.unchanged++; continue; }
+        const page = Math.ceil(number / 30);
+        const group = groups.get(page) || [];
+        group.push(numeric[0]);
+        groups.set(page, group);
+      }
+      const candidateCount = [...groups.values()].reduce((sum, items) => sum + items.length, 0);
+      let processed = 0;
+      for (const [page, items] of groups) {
+        check();
+        syncMessage(`회차 제목을 NAS 파일 이름에 반영하는 중 · ${processed} / ${candidateCount}`);
+        const allowed = new Map(items.map(item => [item.entry.path, item.number]));
+        // A write is sent once. A lost response is reconciled by a later folder scan.
+        const data = await request('sync_episode_names', {
+          folder, paths: [...allowed.keys()], productId, page, expectedTitle: title, expectedAuthor: author,
+        }, { signal: operation.controller.signal });
+        check();
+        if (data.folder !== folder || data.productId !== productId || data.page !== page || !Array.isArray(data.results) || data.results.length > items.length) throw failure('INVALID_REQUEST');
+        const seen = new Set();
+        const accepted = [];
+        for (const item of data.results) {
+          if (!item || !allowed.has(item.oldPath) || seen.has(item.oldPath) || item.number !== allowed.get(item.oldPath) ||
+              !['renamed', 'unchanged', 'conflict', 'missing', 'skipped'].includes(item.status) ||
+              (['renamed', 'unchanged'].includes(item.status) && !directChild(item.newPath, folder))) throw failure('INVALID_REQUEST');
+          if (['renamed', 'unchanged'].includes(item.status) && model.namedFor && model.namedFor(basename(item.newPath), title)?.number !== item.number) throw failure('INVALID_REQUEST');
+          seen.add(item.oldPath);
+          accepted.push({ oldPath: item.oldPath, newPath: item.newPath, number: item.number, status: item.status });
+        }
+        for (const item of accepted) {
+          if (item.status === 'renamed') summary.renamed++;
+          else if (item.status === 'unchanged') summary.unchanged++;
+          else { summary.skipped++; if (item.status === 'conflict') summary.conflicts++; }
+        }
+        summary.skipped += items.length - seen.size;
+        summary.results.push(...accepted);
+        remapSyncedEntries(accepted, folder);
+        processed += items.length;
+      }
+      syncMessage(summary.skipped
+        ? `NAS 파일 ${summary.renamed}개 이름을 반영했습니다. 중복 또는 확인이 필요한 파일은 유지했습니다.`
+        : summary.renamed ? `NAS 파일 ${summary.renamed}개 이름을 반영했습니다.` : 'NAS 파일 이름을 확인했습니다.', summary.skipped ? '' : 'success');
+      return summary;
+    } catch (error) {
+      if (error?.code === 'SESSION_EXPIRED') resetSession();
+      if (!isCancelled(error)) syncMessage('NAS 파일 이름을 반영하지 못했습니다. 다시 연결하면 재시도합니다.' + (summary.renamed ? ` ${summary.renamed}개 파일 이름은 반영했습니다.` : ''), 'error');
+      return { ...summary, error: error?.code || 'NETWORK_ERROR', cancelled: isCancelled(error) };
+    } finally { finishOperation(operation); }
   }
 
   function element(tag, className, text) {
@@ -814,7 +1011,7 @@
       button.tabIndex = checked ? -1 : 0;
     });
     $('nasApprovalCancel').disabled = !approvalPending;
-    $('nasLogout').disabled = locked && !selectingAll;
+    $('nasLogout').disabled = locked && !selectingAll && busy !== 'name-sync';
     $('nasBookName').disabled = locked;
     $('nasDownloadButton').disabled = !ready || !authenticated || locked || !selected.size || !$('nasBookName').value.trim();
     $('nasDownloadButton').querySelector('span').textContent = busy === 'download' ? '가져오는 중…' : '보관함에 추가';
@@ -918,6 +1115,7 @@
     const bookName = $('nasBookName').value.trim();
     if (!bookName) { $('nasBookName').focus(); return; }
     const files = [...selected.values()];
+    const origin = { endpoint, folder: currentPath };
     const controller = new AbortController();
     downloadController = controller;
     busy = 'download';
@@ -950,7 +1148,7 @@
         importInProgress = true;
         $('nasTransferStatus').textContent = `서재에 추가 중 · ${index + 1} / ${files.length}`;
         updateControls();
-        const imported = await api.actions.importDownloaded([file], bookName);
+        const imported = await api.actions.importDownloaded([file], bookName, origin);
         if (!imported || typeof imported !== 'object') throw failure('INVALID_REQUEST', '서재에 추가한 결과를 확인하지 못했습니다.');
         const added = resultCount(imported.added), skipped = resultCount(imported.skipped), failed = resultCount(imported.failed);
         result.added += added;
@@ -976,6 +1174,7 @@
       $('nasTransferProgress').hidden = true;
       $('nasTransferFilename').textContent = '';
       updateView();
+      scheduleIdle();
       const summary = resultText(result, interrupted);
       if (visible) message((downloadError ? downloadError.message + ' ' : '') + summary, downloadError || result.failed ? 'error' : 'success', result.added > 0 || result.skipped > 0);
       else if (completed || downloadError) notify((downloadError ? downloadError.message + ' ' : '') + summary);
@@ -984,6 +1183,7 @@
 
   async function logout() {
     if (busy === 'select-all') cancelListOperation(false);
+    if (busy === 'name-sync') cancelNameSync();
     if (busy) return;
     const operation = beginOperation('logout');
     const pending = sessionToken && csrfToken ? request('logout', {}, { signal: operation.controller.signal }) : Promise.resolve();
@@ -1048,8 +1248,10 @@
     if (!['http:', 'https:'].includes(url.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || url.username || url.password || url.search || url.hash) {
       throw new Error('로컬 테스트 주소만 사용할 수 있습니다.');
     }
+    if (busy === 'name-sync') cancelNameSync();
     if (busy) throw new Error('진행 중인 요청을 먼저 끝내 주세요.');
     endpoint = url.href;
+    nameSyncHealth = null;
     resetSession();
     clearSecrets(true);
     setOtpOpen(false);

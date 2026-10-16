@@ -23,6 +23,16 @@
   function text(value) {
     return typeof value === 'string' && value.length <= 300 && !/[\u0000-\u001f\u007f]/.test(value);
   }
+  // A title already encoded in a renamed NAS file is kept as written. It is
+  // separate from numberFor, which permits online replacement of numeric names.
+  function namedFor(fileName) {
+    if (typeof fileName !== 'string' || !/\.txt$/i.test(fileName)) return null;
+    const match = /^([0-9]{1,6})화\s+(.+)\.txt$/i.exec(fileName.normalize('NFC').trim());
+    const number = match ? Number(match[1]) : 0;
+    const title = match?.[2].trim();
+    return Number.isSafeInteger(number) && number >= 1 && number <= 10000 && text(title) && title
+      ? { number, title } : null;
+  }
   function normalize(value) {
     if (!value || typeof value !== 'object' || !/^[1-9][0-9]{0,11}$/.test(value.productId || '') || typeof value.productId !== 'string' ||
         !text(value.title) || !value.title.trim() || !text(value.author) ||
@@ -40,5 +50,5 @@
     episodes.sort((a, b) => a.number - b.number);
     return { productId: value.productId, title: value.title.trim(), author: value.author.trim(), episodes, pages: [...(value.pages || [])].sort((a, b) => a - b), checkedAt: value.checkedAt };
   }
-  window.TextviewEpisodeTitleModel = { numberFor, normalize, titleKey, authorKey };
+  window.TextviewEpisodeTitleModel = { numberFor, namedFor, normalize, titleKey, authorKey };
 })();

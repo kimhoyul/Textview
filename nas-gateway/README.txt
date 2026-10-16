@@ -3,8 +3,8 @@ Textview NAS 연결 서버
 업로드 위치
 /volume1/web/NASDownloader/textview-nas/
 
-처음 설치할 때 이 폴더의 api.php, synology.php, cover-search.php, episode-titles.php, config.php를 함께 복사하세요.
-업데이트할 때는 기존 config.php를 유지하고 나머지 네 PHP 파일을 함께 복사하세요.
+처음 설치할 때 이 폴더의 api.php, synology.php, cover-search.php, episode-titles.php, episode-rename.php, config.php를 함께 복사하세요.
+업데이트할 때는 기존 config.php를 유지하고 나머지 다섯 PHP 파일을 함께 복사하세요.
 기존 Web Station의 PHP 8.4 프로필을 사용하세요.
 PHP cURL과 세션 기능을 켜 두세요.
 다른 Textview 파일을 이 서버 폴더에 넣을 필요는 없습니다.
@@ -15,7 +15,7 @@ https://chhc007.synology.me:9444/textview-nas/api.php
 업로드 후 실행 확인 주소
 https://chhc007.synology.me:9444/textview-nas/api.php?health=1
 이 주소를 브라우저에서 열면 ready, php, curl, session, gatewayVersion을 확인할 수 있습니다.
-표지 검색은 coverSearch: true, 회차 제목 조회는 episodeTitles: true로 확인합니다.
+표지 검색은 coverSearch: true, 회차 제목 조회는 episodeTitles: true, 회차 파일명 반영은 episodeRename: true로 확인합니다.
 gatewayVersion: nas4는 업로드한 서버 코드 버전입니다. 실제 NAS 승인 로그인 성공을 뜻하지 않습니다.
 이 확인 요청은 로그인, NAS 조회, 세션 생성, 임시 파일 생성을 하지 않습니다.
 
@@ -77,7 +77,8 @@ NAS 자체의 로그인 제한도 그대로 적용됩니다.
 브라우저 토큰은 메모리에만 보관하세요. localStorage와 IndexedDB에 저장하지 마세요.
 로그인 성공 시 sessionToken과 csrfToken이 바뀝니다. 기존 값을 둘 다 교체하세요.
 새로고침 후에는 bootstrap과 로그인을 다시 실행합니다.
-앱은 NAS 파일을 수정, 삭제, 업로드하지 않습니다.
+앱은 NAS TXT를 내려받고, 확인한 회차 제목을 숫자 TXT의 파일 이름에 반영합니다.
+본문 수정, 삭제, 업로드 기능은 없습니다.
 
 API
 로그인과 파일 요청은 POST이며 Content-Type: application/json입니다.
@@ -137,6 +138,17 @@ X-Textview-Session-Expires-In은 다운로드 응답 시점의 남은 세션 초
 
 POST {"action":"logout"}
 응답: {"ok":true}
+
+회차 파일 이름 반영
+POST {"action":"sync_episode_names","folder":"/Books/Novel/작품명","paths":["/Books/Novel/작품명/383.txt"],"productId":"작품 ID","page":13,"expectedTitle":"작품명","expectedAuthor":"작가"}
+기존 로그인 세션과 CSRF 헤더가 필요합니다. 공개 메타데이터용 익명 세션은 사용할 수 없습니다.
+한 요청의 paths는 같은 작품 폴더의 TXT 1~30개입니다. 폴더 전체 검사는 최대 10,000개이며 하위 폴더를 재귀 탐색하지 않습니다.
+서버가 공개 목차를 다시 조회하고 작품명, 작가, 폴더 이름, 회차 번호를 대조합니다.
+숫자로만 된 원본 이름을 '383화 회차 제목.txt' 형식으로 바꿉니다. 브라우저가 새 이름을 지정할 수 없습니다.
+SYNO.FileStation.Rename API 버전 2를 사용합니다. DSM이 현재 계정의 파일 권한을 검사합니다.
+이미 제목이 있는 파일, 중복 회차, 기존 대상 파일은 덮어쓰지 않습니다. 본문은 변경하지 않습니다.
+응답의 results에는 oldPath, newPath, number, status가 있습니다. status는 renamed, unchanged, conflict, missing, skipped 중 하나입니다.
+표지 검색과 회차 제목 조회는 기존처럼 NAS 파일 접근 권한이 없는 별도 익명 세션도 사용할 수 있습니다.
 
 오류 형식
 {"ok":false,"error":{"code":"오류 코드","message":"한국어 안내"}}
