@@ -21,7 +21,7 @@ function nas_shared_cover_metadata(string $raw, string $folder): array
         throw nas_shared_cover_invalid();
     }
     foreach (['title', 'author', 'sourceName'] as $field) {
-        if (!is_string($data[$field] ?? null) || strlen($data[$field]) > 1200 || preg_match('//u', $data[$field]) !== 1
+        if (!is_string($data[$field] ?? null) || strlen($data[$field]) > 1200 || preg_match('/\A.{0,300}\z/us', $data[$field]) !== 1
             || preg_match('/\p{Cc}/u', $data[$field]) === 1 || ($field === 'title' && trim($data[$field]) === '')) { throw nas_shared_cover_invalid(); }
     }
     return array_intersect_key($data, array_flip(['schemaVersion', 'folder', 'revision', 'title', 'author', 'sourceName', 'width', 'height', 'updatedAt']));
