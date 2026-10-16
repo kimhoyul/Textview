@@ -123,7 +123,9 @@
   let idleTimer = 0;
   let pendingConnected = false;
   const selected = new Map();
-  const api = { actions: {}, render, show, hide, setEndpoint, getEndpoint: () => endpoint, canSyncEpisodeNames, syncEpisodeNames };
+  const sharedCoverRequests = new Map();
+  const sharedCoverContexts = new WeakMap();
+  const api = { actions: {}, render, show, hide, setEndpoint, getEndpoint: () => endpoint, canSyncEpisodeNames, syncEpisodeNames, getSharedCover, isSharedCoverCurrent };
   window.TextviewNAS = api;
 
   class NASError extends Error {
@@ -202,6 +204,7 @@
     bootstrapPromise = null;
     pendingConnected = false;
     nameSyncHealth = null;
+    sharedCoverRequests.clear();
     currentPath = '/';
     entries = [];
     total = nextOffset = 0;
@@ -343,7 +346,29 @@
         return { buffer, filename: response.headers.get('X-Textview-Filename') };
       }
       let data;
-      try { data = await response.json(); } catch (_) { throw failure('NAS_UNREACHABLE'); }
+      try {
+        if (options.maxJSONBytes) {
+          const declared = Number(response.headers.get('Content-Length'));
+          if (Number.isFinite(declared) && declared > options.maxJSONBytes) throw failure('INVALID_REQUEST');
+          const reader = response.body?.getReader?.();
+          if (!reader) throw failure('INVALID_REQUEST');
+          const chunks = [];
+          let length = 0;
+          try {
+            while (true) {
+              const part = await reader.read();
+              if (part.done) break;
+              length += part.value.byteLength;
+              if (length > options.maxJSONBytes) { await reader.cancel(); throw failure('INVALID_REQUEST'); }
+              chunks.push(part.value);
+            }
+          } finally { reader.releaseLock(); }
+          const bytes = new Uint8Array(length);
+          let cursor = 0;
+          for (const chunk of chunks) { bytes.set(chunk, cursor); cursor += chunk.byteLength; }
+          data = JSON.parse(new TextDecoder().decode(bytes));
+        } else data = await response.json();
+      } catch (error) { if (error instanceof NASError) throw error; throw failure('NAS_UNREACHABLE'); }
       if (data?.ok !== true) throw failure(data?.error?.code || 'INVALID_REQUEST', typeof data?.error?.message === 'string' ? data.error.message : undefined);
       if (options.binary) throw failure('INVALID_REQUEST');
       if (requestGeneration === sequence && !controller.signal.aborted && !parentSignal?.aborted) refreshSessionExpiry(data.expiresIn);
@@ -664,6 +689,46 @@
   function canSyncEpisodeNames() {
     return authenticated && !!sessionToken && !!csrfToken && !busy && !importInProgress &&
       (!sessionExpiresAt || Date.now() < sessionExpiresAt) && window.navigator?.onLine !== false;
+  }
+
+  function sharedCoverSource(source) {
+    const folder = source?.folder;
+    return source?.endpoint === endpoint && typeof folder === 'string' && folder.length <= 4096 && folder.startsWith('/') &&
+      !folder.endsWith('/') && !/[\\\u0000-\u001f\u007f]/.test(folder) &&
+      folder.split('/').slice(1).every(part => part && part !== '.' && part !== '..') ? folder : null;
+  }
+
+  function isSharedCoverCurrent(cover, source) {
+    const context = sharedCoverContexts.get(cover);
+    return !!context && !!sharedCoverSource(source) && authenticated && !!sessionToken && !!csrfToken &&
+      context.sequence === sequence && context.session === sessionToken && context.endpoint === endpoint && context.folder === source.folder &&
+      (!sessionExpiresAt || Date.now() < sessionExpiresAt) && window.navigator?.onLine !== false;
+  }
+
+  async function getSharedCover(source) {
+    const folder = sharedCoverSource(source);
+    if (!folder || !authenticated || !sessionToken || !csrfToken || (sessionExpiresAt && Date.now() >= sessionExpiresAt) || window.navigator?.onLine === false) throw failure('SESSION_EXPIRED');
+    const context = { sequence, session: sessionToken, endpoint, folder };
+    const key = endpoint + '\n' + folder;
+    if (busy === 'download' && sharedCoverRequests.has(key)) return sharedCoverRequests.get(key);
+    const pending = (async () => {
+      const data = await request('get_shared_cover', { folder }, { signal: downloadController?.signal, maxJSONBytes: 1500000 });
+      if (context.sequence !== sequence || context.session !== sessionToken || context.endpoint !== endpoint || !authenticated ||
+          (sessionExpiresAt && Date.now() >= sessionExpiresAt) || window.navigator?.onLine === false) throw failure('CANCELLED');
+      if (data.folder !== undefined && data.folder !== folder) throw failure('INVALID_REQUEST');
+      if (data.cover === null) return null;
+      const cover = data.cover;
+      const safeText = value => typeof value === 'string' && value.length <= 300 && !/[\u0000-\u001f\u007f]/.test(value);
+      if (!cover || cover.schemaVersion !== 1 || !/^[a-f0-9]{64}$/.test(cover.revision || '') ||
+          !safeText(cover.title) || !safeText(cover.author) || !safeText(cover.sourceName) ||
+          !Number.isSafeInteger(cover.width) || cover.width < 1 || cover.width > 1536 ||
+          !Number.isSafeInteger(cover.height) || cover.height < 1 || cover.height > 1536 ||
+          cover.folder !== folder || typeof cover.imageDataURL !== 'string' || cover.imageDataURL.length > 1398136 || !cover.imageDataURL.startsWith('data:image/jpeg;base64,')) throw failure('INVALID_REQUEST');
+      sharedCoverContexts.set(cover, context);
+      return cover;
+    })();
+    if (busy === 'download') sharedCoverRequests.set(key, pending);
+    return pending;
   }
   function cancelNameSync() {
     if (busy !== 'name-sync') return;
@@ -1125,6 +1190,8 @@
     $('nasDownloadProgress').max = files.length;
     $('nasDownloadProgress').value = 0;
     const result = { added: 0, skipped: 0, failed: 0 };
+    const coverWarnings = new Set();
+    sharedCoverRequests.clear();
     let completed = 0;
     let interrupted = false;
     let downloadError = null;
@@ -1154,6 +1221,7 @@
         result.added += added;
         result.skipped += skipped;
         result.failed += failed;
+        if (typeof imported.coverWarning === 'string' && imported.coverWarning) coverWarnings.add(imported.coverWarning);
         if (failed || (!added && !skipped)) {
           if (!failed) result.failed++;
           throw failure('INVALID_REQUEST', '서재에 저장하지 못했습니다. 선택한 파일을 유지했습니다.');
@@ -1170,12 +1238,13 @@
     } finally {
       importInProgress = false;
       downloadController = null;
+      sharedCoverRequests.clear();
       busy = '';
       $('nasTransferProgress').hidden = true;
       $('nasTransferFilename').textContent = '';
       updateView();
       scheduleIdle();
-      const summary = resultText(result, interrupted);
+      const summary = [resultText(result, interrupted), ...coverWarnings].join(' ');
       if (visible) message((downloadError ? downloadError.message + ' ' : '') + summary, downloadError || result.failed ? 'error' : 'success', result.added > 0 || result.skipped > 0);
       else if (completed || downloadError) notify((downloadError ? downloadError.message + ' ' : '') + summary);
     }

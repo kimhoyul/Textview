@@ -3,8 +3,8 @@ Textview NAS 연결 서버
 업로드 위치
 /volume1/web/NASDownloader/textview-nas/
 
-처음 설치할 때 이 폴더의 api.php, synology.php, cover-search.php, episode-titles.php, episode-rename.php, config.php를 함께 복사하세요.
-업데이트할 때는 기존 config.php를 유지하고 나머지 다섯 PHP 파일을 함께 복사하세요.
+처음 설치할 때 이 폴더의 api.php, synology.php, cover-search.php, episode-titles.php, episode-rename.php, shared-cover.php, config.php를 함께 복사하세요.
+업데이트할 때는 기존 config.php를 유지하고 나머지 여섯 PHP 파일을 함께 복사하세요.
 기존 Web Station의 PHP 8.4 프로필을 사용하세요.
 PHP cURL과 세션 기능을 켜 두세요.
 다른 Textview 파일을 이 서버 폴더에 넣을 필요는 없습니다.
@@ -177,6 +177,25 @@ proofPresent, typesPresent: true 또는 false
 6. TXT를 기존 책장에 추가합니다.
 7. 인터넷 연결 없이 추가한 TXT를 읽습니다.
 8. 로그아웃 후 목록과 다운로드가 차단되는지 확인합니다.
+
+작품 표지 공유
+get_shared_cover는 로그인과 CSRF 검사를 통과한 요청만 처리합니다.
+요청 필드는 action과 folder입니다. folder는 작품의 정확한 NAS 폴더 경로입니다.
+매 요청에서 DSM의 폴더 정보와 목록 접근 권한을 확인합니다.
+읽기 전용 공유 폴더도 사용할 수 있습니다.
+각 표지 파일의 읽기 권한은 DSM에서 다시 검사합니다.
+작품 폴더의 .hoyul-cover.json을 읽습니다. 파일 크기 상한은 8 KB입니다.
+schemaVersion=1과 정확한 folder 값을 확인합니다.
+revision은 JPEG의 SHA-256 값입니다. 소문자 16진수 64자리만 허용합니다.
+이미지는 .hoyul-cover-<revision>.jpg에서만 읽습니다. 파일 크기 상한은 1 MB입니다.
+이미지의 SHA-256, JPEG 형식, 실제 가로·세로 크기를 확인합니다.
+가로와 세로는 각각 1536 픽셀 이하여야 합니다.
+표지가 없으면 cover:null을 반환합니다. 권한 거부와 세션 만료는 오류로 반환합니다.
+표지가 있으면 cover.imageDataURL과 표시용 작품 정보를 반환합니다.
+이 조회 API는 파일을 저장하거나 수정하지 않습니다. 기존 download는 계속 TXT만 허용합니다.
+관리 도구는 새 JPEG를 먼저 저장하고 .hoyul-cover.json을 마지막에 원자 교체합니다.
+이전 JPEG는 삭제하지 않습니다. TXT 본문과 기존 파일 이름도 변경하지 않습니다.
+health=1 응답의 sharedCover:true로 설치 여부를 확인할 수 있습니다.
 
 서버 테스트 경계
 synology.php는 정의만 로드합니다.

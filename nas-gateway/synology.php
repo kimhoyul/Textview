@@ -332,7 +332,7 @@ final class SynologyClient
         } finally { $response->close(); }
     }
 
-    private function request(string $api, string $method, array $params, bool $authenticate, bool $download = false, ?int $timeout = null): SynologyResponse
+    private function request(string $api, string $method, array $params, bool $authenticate, bool $download = false, ?int $timeout = null, ?int $maximum = null): SynologyResponse
     {
         $version = $this->version($api);
         $fields = ['api' => $api, 'version' => (string)$version, 'method' => $method];
@@ -351,7 +351,7 @@ final class SynologyClient
             }
         }
         return $this->transport->post($this->baseUrl . '/webapi/' . $this->apis[$api]['path'], $fields, $headers,
-            (int)$this->config[$download ? 'max_download_bytes' : 'max_json_bytes'],
+            $maximum ?? (int)$this->config[$download ? 'max_download_bytes' : 'max_json_bytes'],
             $timeout ?? (int)$this->config[$download ? 'download_timeout' : 'api_timeout']);
     }
 
@@ -592,6 +592,70 @@ final class SynologyClient
             throw nas_error('FORBIDDEN');
         }
         return ['path' => $path, 'name' => basename($path), 'size' => $size];
+    }
+
+    /** The shared cover reader never relies on PHP's filesystem permissions. */
+    private function sharedCoverInfo(string $path, bool $directory): ?array
+    {
+        self::validatePath($path, false);
+        $response = $this->request('SYNO.FileStation.List', 'getinfo', ['path' => [$path], 'additional' => ['size', 'perm']], true);
+        try {
+            if ($response->httpStatus !== 200) {
+                throw nas_error(in_array($response->httpStatus, [401, 403, 404], true) ? 'FORBIDDEN' : 'NAS_UNREACHABLE');
+            }
+            $body = $response->json((int)$this->config['max_json_bytes']);
+            if (($body['success'] ?? false) !== true) {
+                if (!$directory && (int)($body['error']['code'] ?? 0) === 408) { return null; }
+                self::checkApiResult($body);
+            }
+            $items = $body['data']['files'] ?? null;
+            $item = is_array($items) && count($items) === 1 ? ($items[0] ?? null) : null;
+            if (!$directory && is_array($item) && ($item['path'] ?? null) === $path && (int)($item['code'] ?? 0) === 408) { return null; }
+            if (!is_array($item) || ($item['path'] ?? null) !== $path || ($item['name'] ?? null) !== basename($path)
+                || ($item['isdir'] ?? null) !== $directory || isset($item['code'])) { throw nas_error('FORBIDDEN'); }
+            $permission = $item['additional']['perm'] ?? [];
+            if (is_array($permission['acl'] ?? null) && array_key_exists('read', $permission['acl']) && $permission['acl']['read'] !== true) {
+                throw nas_error('FORBIDDEN');
+            }
+            // Read-only shares are valid. DSM also checks read permission again on download.
+            return $item;
+        } finally { $response->close(); }
+    }
+
+    public function authorizeSharedCoverFolder(string $folder): void
+    {
+        self::validatePath($folder, false);
+        if ($this->sid === null) { throw nas_error('SESSION_EXPIRED'); }
+        $this->sharedCoverInfo($folder, true);
+        $this->listEntries($folder, 0, 1);
+    }
+
+    /** Only the fixed manifest and a hash-derived JPEG can pass this boundary. */
+    public function sharedCoverAsset(string $folder, ?string $revision = null): ?string
+    {
+        self::validatePath($folder, false);
+        if ($revision !== null && preg_match('/^[a-f0-9]{64}$/D', $revision) !== 1) { throw nas_error('INVALID_REQUEST'); }
+        $path = $folder . '/' . ($revision === null ? '.hoyul-cover.json' : '.hoyul-cover-' . $revision . '.jpg');
+        $maximum = $revision === null ? 8192 : 1024 * 1024;
+        $info = $this->sharedCoverInfo($path, false);
+        if ($info === null) { return null; }
+        $size = $info['additional']['size'] ?? null;
+        if (!is_int($size) || $size < 1 || $size > $maximum) { throw nas_error('NAS_UNREACHABLE'); }
+        $response = $this->request('SYNO.FileStation.Download', 'download', ['path' => [$path], 'mode' => 'download'], true, true, null, $maximum);
+        try {
+            $mime = strtolower(trim(explode(';', $response->contentType)[0]));
+            $attachment = preg_match('/^attachment(?:;|$)/i', $response->contentDisposition) === 1;
+            if (($mime === 'application/json' || str_ends_with($mime, '+json')) && !$attachment) {
+                try { $body = json_decode($response->text($maximum), true, 16, JSON_THROW_ON_ERROR); }
+                catch (JsonException) { $body = null; }
+                if (is_array($body) && ($body['success'] ?? null) === false && is_array($body['error'] ?? null)) { self::checkApiResult($body); }
+            }
+            if ($response->httpStatus !== 200) {
+                throw nas_error(in_array($response->httpStatus, [401, 403, 404], true) ? 'FORBIDDEN' : 'NAS_UNREACHABLE');
+            }
+            if ($response->bytes !== $size || $response->bytes > $maximum) { throw nas_error('NAS_UNREACHABLE'); }
+            return $response->text($maximum);
+        } finally { $response->close(); }
     }
 
     /** DSM, rather than the PHP process account, authorizes every metadata read. */

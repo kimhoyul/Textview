@@ -5,6 +5,7 @@ require_once __DIR__ . '/synology.php';
 require_once __DIR__ . '/cover-search.php';
 require_once __DIR__ . '/episode-titles.php';
 require_once __DIR__ . '/episode-rename.php';
+require_once __DIR__ . '/shared-cover.php';
 
 function nas_private_directory(string $directory): void
 {
@@ -385,7 +386,7 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             nas_json(['ok' => true, 'ready' => $phpReady && $curlReady && $sessionReady,
                 'php' => PHP_VERSION, 'curl' => $curlReady, 'session' => $sessionReady,
                 'gatewayVersion' => (string)($config['gateway_version'] ?? 'nas6'),
-                'coverSearch' => nas_cover_available(), 'episodeTitles' => nas_episode_available(), 'episodeRename' => nas_episode_available()]);
+                'coverSearch' => nas_cover_available(), 'episodeTitles' => nas_episode_available(), 'episodeRename' => nas_episode_available(), 'sharedCover' => true]);
         }
         if (nas_cors($config)) { return; }
         if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
@@ -411,6 +412,7 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             'cover_download' => ['action', 'token'],
             'episode_titles' => ['action', 'productId', 'page'],
             'sync_episode_names' => ['action', 'folder', 'paths', 'productId', 'page', 'expectedTitle', 'expectedAuthor'],
+            'get_shared_cover' => ['action', 'folder'],
             default => throw nas_error('INVALID_REQUEST'),
         };
         foreach (array_keys($input) as $key) { if (!in_array($key, $allowed, true)) { throw nas_error('INVALID_REQUEST'); } }
@@ -517,6 +519,12 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
         }
         if (!is_array($_SESSION['dsm'] ?? null)) { throw nas_error(isset($_SESSION['approval']) ? 'FORBIDDEN' : 'SESSION_EXPIRED'); }
         $client->restoreAuthentication($_SESSION['dsm']);
+        if ($action === 'get_shared_cover') {
+            $result = nas_get_shared_cover($client, $input['folder'] ?? null);
+            $_SESSION['last_seen'] = time();
+            $result['expiresIn'] = nas_expiry($config, $_SESSION);
+            nas_json($result);
+        }
         if ($action === 'sync_episode_names') {
             if (!nas_episode_available()) { throw nas_episode_error(); }
             $result = nas_sync_episode_names($client, $input, $_SESSION);

@@ -28,6 +28,8 @@
   let coverSearch = { query: '', results: [], loading: false, error: '' };
   const coverURLs = new Map();
   const coverMetadataAttempts = new Set();
+  const sharedCoverJobs = new Map();
+  const coverEditGeneration = new Map();
   let coverMetadataUpdating = false;
   const episodeTitleMaps = new WeakMap();
   const episodeTitleJobs = new Map();
@@ -323,6 +325,68 @@
   function nasOrigin(book) {
     const value = memoryState.get('nas-origin:' + book)?.value;
     return normalizedNASOrigin(book, value) ? value : null;
+  }
+
+  async function applySharedNASCover(book, source) {
+    if (sharedCoverJobs.has(book)) return sharedCoverJobs.get(book);
+    const pending = syncSharedNASCover(book, source);
+    sharedCoverJobs.set(book, pending);
+    try { return await pending; }
+    finally { if (sharedCoverJobs.get(book) === pending) sharedCoverJobs.delete(book); }
+  }
+
+  async function syncSharedNASCover(book, source) {
+    const safe = normalizedNASOrigin(book, source);
+    const nas = window.TextviewNAS;
+    if (!safe || !db || !inBook(book).length || !nas?.getSharedCover || !window.TextviewCoverImage?.restore) return false;
+    const key = 'cover:' + book;
+    const original = memoryState.get(key);
+    const shared = original?.value?.sharedNAS;
+    // A cover chosen on this phone always takes precedence over the NAS cover.
+    if (original?.value?.blob instanceof Blob && (!shared || shared.endpoint !== safe.endpoint || shared.folder !== safe.folder)) return false;
+    const generation = episodeTitleGeneration.get(book) || 0;
+    const editGeneration = coverEditGeneration.get(book) || 0;
+    const valid = () => !!db && !busy && !!inBook(book).length && (episodeTitleGeneration.get(book) || 0) === generation &&
+      (coverEditGeneration.get(book) || 0) === editGeneration && memoryState.get(key) === original &&
+      nasOrigin(book)?.endpoint === safe.endpoint && nasOrigin(book)?.folder === safe.folder;
+    const cover = await nas.getSharedCover(safe);
+    if (!cover || !valid() || !nas.isSharedCoverCurrent?.(cover, safe)) return false;
+    if (shared?.revision === cover.revision) return false;
+    const value = await window.TextviewCoverImage.restore(cover.imageDataURL);
+    if (!valid() || !nas.isSharedCoverCurrent(cover, safe)) return false;
+    if (value.width !== cover.width || value.height !== cover.height) throw new Error('NAS 표지 이미지 정보를 확인하지 못했습니다.');
+    const record = { key, value: { ...value, ...coverCredits(cover),
+      sharedNAS: { endpoint: safe.endpoint, folder: safe.folder, revision: cover.revision } }, updatedAt: Date.now() };
+    const saved = await new Promise((resolve, reject) => {
+      const tx = db.transaction('state', 'readwrite');
+      const store = tx.objectStore('state');
+      const request = store.get(key);
+      let written = false;
+      request.onsuccess = () => {
+        if (!valid() || !nas.isSharedCoverCurrent(cover, safe)) return;
+        const existing = request.result;
+        const priorShared = existing?.value?.sharedNAS;
+        const unchanged = original ? existing?.updatedAt === original.updatedAt && priorShared?.endpoint === shared?.endpoint &&
+          priorShared?.folder === shared?.folder && priorShared?.revision === shared?.revision : !existing;
+        if (!unchanged) return;
+        store.put(record);
+        written = true;
+      };
+      tx.oncomplete = () => resolve(written);
+      tx.onabort = () => reject(tx.error || new Error('표지를 기기에 저장하지 못했습니다.'));
+      tx.onerror = () => {};
+    });
+    if (saved && valid() && nas.isSharedCoverCurrent(cover, safe)) {
+      memoryState.set(key, record);
+      renderHome();
+      if (coverBookName === book && coverDraft && !coverDraft.changed && !coverProcessing) {
+        releaseCoverDraft();
+        coverDraft = { url: coverURL(book), custom: true, changed: false, ownedURL: false, ...coverCredits(record.value) };
+        renderCoverPicker();
+      }
+      return true;
+    }
+    return false;
   }
 
   async function bindNASOrigin(book, source, replace = false) {
@@ -646,6 +710,7 @@
     if (!coverActive || !coverDraft?.changed || coverProcessing || busy || !db) return;
     const book = coverBookName;
     const key = 'cover:' + book;
+    coverEditGeneration.set(book, (coverEditGeneration.get(book) || 0) + 1);
     coverProcessing = true;
     renderCoverPicker();
     window.TextviewCoverPicker.setStatus('표지를 저장하고 있습니다.');
@@ -1189,7 +1254,12 @@
     const result = await importFiles(files, { bookName, encoding: 'auto', nasAlias: true });
     if (source && (result.added || result.skipped)) {
       const book = (bookName.trim() || '내 책').normalize('NFC').slice(0, 100);
-      try { await bindNASOrigin(book, source, true); }
+      try {
+        if (await bindNASOrigin(book, source, true)) {
+          try { await applySharedNASCover(book, source); }
+          catch { result.coverWarning = 'TXT는 저장했습니다. 작품 표지는 다시 가져올 때 적용합니다.'; }
+        }
+      }
       catch { showToast('TXT는 저장했습니다. NAS 원본 폴더는 다시 연결할 때 저장합니다.'); }
     }
     return result;
