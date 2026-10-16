@@ -6,6 +6,13 @@ function nas_shared_cover_invalid(): GatewayError
     return new GatewayError('SHARED_COVER_INVALID', 502, '저장된 작품 표지를 확인하지 못했습니다. 기존 표지를 유지합니다.');
 }
 
+function nas_shared_cover_revision(mixed $revision): ?string
+{
+    if ($revision === null) { return null; }
+    if (!is_string($revision) || preg_match('/^[a-f0-9]{64}$/Di', $revision) !== 1) { throw nas_error('INVALID_REQUEST'); }
+    return strtolower($revision);
+}
+
 /** Shared covers contain display values only; they do not verify provider identity. */
 function nas_shared_cover_metadata(string $raw, string $folder): array
 {
@@ -27,14 +34,18 @@ function nas_shared_cover_metadata(string $raw, string $folder): array
     return array_intersect_key($data, array_flip(['schemaVersion', 'folder', 'revision', 'title', 'author', 'sourceName', 'width', 'height', 'updatedAt']));
 }
 
-/** Every lookup reauthorizes the exact work folder and both assets with DSM. */
-function nas_get_shared_cover(SynologyClient $client, mixed $folder): array
+/** Every lookup reauthorizes the exact work folder and manifest with DSM. */
+function nas_get_shared_cover(SynologyClient $client, mixed $folder, mixed $revision = null): array
 {
+    $revision = nas_shared_cover_revision($revision);
     $folder = SynologyClient::validatePath($folder, false);
     $client->authorizeSharedCoverFolder($folder);
     $raw = $client->sharedCoverAsset($folder);
     if ($raw === null) { return ['ok' => true, 'cover' => null]; }
     $metadata = nas_shared_cover_metadata($raw, $folder);
+    if ($revision !== null && hash_equals($metadata['revision'], $revision)) {
+        return ['ok' => true, 'cover' => $metadata + ['unchanged' => true]];
+    }
     $image = $client->sharedCoverAsset($folder, $metadata['revision']);
     if ($image === null) { return ['ok' => true, 'cover' => null]; }
     if (!hash_equals($metadata['revision'], hash('sha256', $image)) || !function_exists('getimagesizefromstring')) { throw nas_shared_cover_invalid(); }

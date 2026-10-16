@@ -6,6 +6,8 @@
   const MAX_FILE_BYTES = 32 * 1024 * 1024;
   const PAGE_LIMIT = 100;
   const NAME_SYNC_MAX_ENTRIES = 10000;
+  const SHARED_COVER_SCOPES = ['/Books/Novel/Completed', '/Books/Novel/Ongoing'];
+  const SHARED_COVER_SCOPE_LIMIT = 1000;
   const paths = {
     back: '<path d="m15 5-7 7 7 7"/>',
     next: '<path d="m9 5 7 7-7 7"/>',
@@ -125,7 +127,7 @@
   const selected = new Map();
   const sharedCoverRequests = new Map();
   const sharedCoverContexts = new WeakMap();
-  const api = { actions: {}, render, show, hide, setEndpoint, getEndpoint: () => endpoint, canSyncEpisodeNames, syncEpisodeNames, getSharedCover, isSharedCoverCurrent };
+  const api = { actions: {}, render, show, hide, setEndpoint, getEndpoint: () => endpoint, canSyncEpisodeNames, syncEpisodeNames, canSyncSharedCovers, findSharedCoverOrigins, getSharedCover, isSharedCoverCurrent };
   window.TextviewNAS = api;
 
   class NASError extends Error {
@@ -691,6 +693,55 @@
       (!sessionExpiresAt || Date.now() < sessionExpiresAt) && window.navigator?.onLine !== false;
   }
 
+  function canSyncSharedCovers() { return canSyncEpisodeNames(); }
+
+  async function findSharedCoverOrigins(books) {
+    if (!canSyncSharedCovers()) return null;
+    const titleKey = value => value.normalize('NFC').trim().replace(/\s+/g, ' ');
+    if (!Array.isArray(books) || books.length > 100 || books.some(book => typeof book !== 'string' || !book.trim() ||
+        book.length > 300 || /[\u0000-\u001f\u007f]/.test(book))) throw failure('INVALID_REQUEST');
+    const requested = [...new Set(books)];
+    const context = { sequence, session: sessionToken, endpoint };
+    const current = () => context.sequence === sequence && context.session === sessionToken && context.endpoint === endpoint && canSyncSharedCovers();
+    const matches = new Map(requested.map(book => [titleKey(book), new Set()]));
+    const summary = { endpoint: context.endpoint, origins: [], ambiguous: [] };
+    if (!requested.length) return summary;
+    try {
+      // Older imports predate stored NAS origins. Check this library's two direct
+      // work-folder lists only; never guess a folder or recursively scan the NAS.
+      for (const scope of SHARED_COVER_SCOPES) {
+        let cursor = 0, count = 1, pages = 0;
+        while (cursor < count) {
+          if (!current()) return null;
+          if (++pages > SHARED_COVER_SCOPE_LIMIT / PAGE_LIMIT) throw failure('INVALID_REQUEST');
+          const data = await request('list', { path: scope, offset: cursor, limit: PAGE_LIMIT });
+          if (!current()) return null;
+          const page = directoryPage(data, scope, cursor);
+          if (page.total > SHARED_COVER_SCOPE_LIMIT || page.entries.length > PAGE_LIMIT ||
+              page.nextOffset > Math.min(page.total, cursor + PAGE_LIMIT)) throw failure('INVALID_REQUEST');
+          for (const entry of page.entries) {
+            if (entry.isDir !== true || parentPath(entry.path) !== scope || basename(entry.path) !== entry.name ||
+                !sharedCoverSource({ endpoint: context.endpoint, folder: entry.path })) continue;
+            matches.get(titleKey(entry.name))?.add(entry.path);
+          }
+          cursor = page.nextOffset;
+          count = page.total;
+        }
+      }
+      if (!current()) return null;
+      for (const book of requested) {
+        const folders = matches.get(titleKey(book));
+        if (folders.size === 1) summary.origins.push({ book, endpoint: context.endpoint, folder: [...folders][0] });
+        else if (folders.size > 1) summary.ambiguous.push(book);
+      }
+      return summary;
+    } catch (error) {
+      if (!current() || isCancelled(error)) return null;
+      if (error?.code === 'SESSION_EXPIRED') { resetSession(); updateView(); }
+      throw error;
+    }
+  }
+
   function sharedCoverSource(source) {
     const folder = source?.folder;
     return source?.endpoint === endpoint && typeof folder === 'string' && folder.length <= 4096 && folder.startsWith('/') &&
@@ -705,14 +756,16 @@
       (!sessionExpiresAt || Date.now() < sessionExpiresAt) && window.navigator?.onLine !== false;
   }
 
-  async function getSharedCover(source) {
+  async function getSharedCover(source, options = {}) {
     const folder = sharedCoverSource(source);
     if (!folder || !authenticated || !sessionToken || !csrfToken || (sessionExpiresAt && Date.now() >= sessionExpiresAt) || window.navigator?.onLine === false) throw failure('SESSION_EXPIRED');
+    const revision = options?.revision;
+    if (revision !== undefined && revision !== null && (typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision))) throw failure('INVALID_REQUEST');
     const context = { sequence, session: sessionToken, endpoint, folder };
-    const key = endpoint + '\n' + folder;
+    const key = endpoint + '\n' + folder + '\n' + (revision || '');
     if (busy === 'download' && sharedCoverRequests.has(key)) return sharedCoverRequests.get(key);
     const pending = (async () => {
-      const data = await request('get_shared_cover', { folder }, { signal: downloadController?.signal, maxJSONBytes: 1500000 });
+      const data = await request('get_shared_cover', { folder, ...(revision ? { revision } : {}) }, { signal: downloadController?.signal, maxJSONBytes: 1500000 });
       if (context.sequence !== sequence || context.session !== sessionToken || context.endpoint !== endpoint || !authenticated ||
           (sessionExpiresAt && Date.now() >= sessionExpiresAt) || window.navigator?.onLine === false) throw failure('CANCELLED');
       if (data.folder !== undefined && data.folder !== folder) throw failure('INVALID_REQUEST');
@@ -723,10 +776,18 @@
           !safeText(cover.title) || !safeText(cover.author) || !safeText(cover.sourceName) ||
           !Number.isSafeInteger(cover.width) || cover.width < 1 || cover.width > 1536 ||
           !Number.isSafeInteger(cover.height) || cover.height < 1 || cover.height > 1536 ||
-          cover.folder !== folder || typeof cover.imageDataURL !== 'string' || cover.imageDataURL.length > 1398136 || !cover.imageDataURL.startsWith('data:image/jpeg;base64,')) throw failure('INVALID_REQUEST');
+          cover.folder !== folder) throw failure('INVALID_REQUEST');
+      if (cover.unchanged === true) {
+        if (!revision || cover.revision !== revision || cover.imageDataURL !== undefined) throw failure('INVALID_REQUEST');
+      } else if (typeof cover.imageDataURL !== 'string' || cover.imageDataURL.length > 1398136 || !cover.imageDataURL.startsWith('data:image/jpeg;base64,')) throw failure('INVALID_REQUEST');
       sharedCoverContexts.set(cover, context);
       return cover;
-    })();
+    })().catch(error => {
+      if (error?.code === 'SESSION_EXPIRED' && context.sequence === sequence && context.session === sessionToken && context.endpoint === endpoint) {
+        resetSession(); updateView();
+      }
+      throw error;
+    });
     if (busy === 'download') sharedCoverRequests.set(key, pending);
     return pending;
   }

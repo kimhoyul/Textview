@@ -29,6 +29,14 @@
   const coverURLs = new Map();
   const coverMetadataAttempts = new Set();
   const sharedCoverJobs = new Map();
+  const sharedCoverOrigins = new Map();
+  const sharedCoverCheckedAt = new Map();
+  const SHARED_COVER_INTERVAL = 5 * 60 * 1000;
+  const SHARED_COVER_RETRY = 60 * 1000;
+  let sharedCoverSweepRunning = false;
+  let sharedCoverSweepWake = false;
+  let sharedCoverDiscoveryAfter = 0;
+  let sharedCoverTimer = 0;
   const coverEditGeneration = new Map();
   let coverMetadataUpdating = false;
   const episodeTitleMaps = new WeakMap();
@@ -199,7 +207,7 @@
     $('deleteBookBtn').disabled = busy || !db || inBook($('bookSelect').value).length === 0;
     updateNavigation();
     renderHome();
-    if (!busy) void drainNASNameSync();
+    if (!busy) { void drainNASNameSync(); void queueSharedCoverSync(); }
   }
 
   function storedCover(book) {
@@ -346,10 +354,10 @@
     if (original?.value?.blob instanceof Blob && (!shared || shared.endpoint !== safe.endpoint || shared.folder !== safe.folder)) return false;
     const generation = episodeTitleGeneration.get(book) || 0;
     const editGeneration = coverEditGeneration.get(book) || 0;
-    const valid = () => !!db && !busy && !!inBook(book).length && (episodeTitleGeneration.get(book) || 0) === generation &&
+    const valid = () => !!db && !busy && !switching && !suppressPosition && !coverProcessing && !!inBook(book).length && (episodeTitleGeneration.get(book) || 0) === generation &&
       (coverEditGeneration.get(book) || 0) === editGeneration && memoryState.get(key) === original &&
-      nasOrigin(book)?.endpoint === safe.endpoint && nasOrigin(book)?.folder === safe.folder;
-    const cover = await nas.getSharedCover(safe);
+      sharedCoverOrigin(book)?.endpoint === safe.endpoint && sharedCoverOrigin(book)?.folder === safe.folder;
+    const cover = await nas.getSharedCover(safe, { revision: shared?.revision });
     if (!cover || !valid() || !nas.isSharedCoverCurrent?.(cover, safe)) return false;
     if (shared?.revision === cover.revision) return false;
     const value = await window.TextviewCoverImage.restore(cover.imageDataURL);
@@ -387,6 +395,110 @@
       return true;
     }
     return false;
+  }
+
+  function sharedCoverOrigin(book) {
+    // Cover discovery does not link TXT files or trigger NAS file-name changes.
+    return nasOrigin(book) || normalizedNASOrigin(book, memoryState.get('cover:' + book)?.value?.sharedNAS) ||
+      normalizedNASOrigin(book, sharedCoverOrigins.get(book));
+  }
+
+  function sharedCoverEligible(book) {
+    const value = memoryState.get('cover:' + book)?.value;
+    if (!(value?.blob instanceof Blob)) return true;
+    return !!value.sharedNAS && value.sharedNAS.endpoint === window.TextviewNAS?.getEndpoint?.();
+  }
+
+  function canAutoSyncSharedCovers() {
+    return !!db && !busy && !switching && !suppressPosition && !coverProcessing && navigator.onLine &&
+      document.visibilityState !== 'hidden' && !!window.TextviewNAS?.canSyncSharedCovers?.();
+  }
+
+  function scheduleSharedCoverSync(delay = SHARED_COVER_INTERVAL) {
+    clearTimeout(sharedCoverTimer);
+    sharedCoverTimer = 0;
+    if (!canAutoSyncSharedCovers()) return;
+    sharedCoverTimer = setTimeout(() => { sharedCoverTimer = 0; void queueSharedCoverSync(); }, delay);
+  }
+
+  function queueSharedCoverSync(force = false) {
+    clearTimeout(sharedCoverTimer);
+    sharedCoverTimer = 0;
+    if (force) {
+      sharedCoverCheckedAt.clear();
+      sharedCoverDiscoveryAfter = 0;
+      if (sharedCoverSweepRunning) sharedCoverSweepWake = true;
+    }
+    if (sharedCoverSweepRunning) { sharedCoverSweepWake = true; return; }
+    if (!canAutoSyncSharedCovers()) return;
+    return drainSharedCoverSync();
+  }
+
+  async function drainSharedCoverSync() {
+    if (sharedCoverSweepRunning || !canAutoSyncSharedCovers()) return;
+    sharedCoverSweepRunning = true;
+    let nextDelay = SHARED_COVER_INTERVAL;
+    const nas = window.TextviewNAS;
+    const endpoint = nas.getEndpoint();
+    const sameConnection = () => canAutoSyncSharedCovers() && window.TextviewNAS === nas && nas.getEndpoint() === endpoint;
+    try {
+      const books = [...new Set(chapters.map(chapter => chapter.book))].filter(sharedCoverEligible);
+      const missing = books.filter(book => !sharedCoverOrigin(book));
+      if (missing.length && Date.now() >= sharedCoverDiscoveryAfter && nas.findSharedCoverOrigins) {
+        sharedCoverDiscoveryAfter = Date.now() + SHARED_COVER_INTERVAL;
+        try {
+          for (let offset = 0; offset < missing.length && sameConnection(); offset += 100) {
+            const names = missing.slice(offset, offset + 100);
+            const generations = new Map(names.map(book => [book, episodeTitleGeneration.get(book) || 0]));
+            const found = await nas.findSharedCoverOrigins(names);
+            if (!found) { sharedCoverDiscoveryAfter = 0; nextDelay = 1000; break; }
+            if (!sameConnection() || found.endpoint !== endpoint) break;
+            const ambiguous = new Set(Array.isArray(found.ambiguous) ? found.ambiguous : []);
+            const matches = new Map();
+            for (const source of Array.isArray(found.origins) ? found.origins : []) {
+              if (!source || !names.includes(source.book) || !normalizedNASOrigin(source.book, source)) continue;
+              if (!matches.has(source.book)) matches.set(source.book, new Map());
+              matches.get(source.book).set(source.folder, source);
+            }
+            for (const [book, folders] of matches) {
+              if (!sameConnection()) break;
+              if (ambiguous.has(book) || folders.size !== 1 || sharedCoverOrigin(book) || !inBook(book).length ||
+                  !sharedCoverEligible(book) || (episodeTitleGeneration.get(book) || 0) !== generations.get(book)) continue;
+              sharedCoverOrigins.set(book, folders.values().next().value);
+            }
+          }
+        } catch {
+          sharedCoverDiscoveryAfter = Date.now() + SHARED_COVER_RETRY;
+          nextDelay = SHARED_COVER_RETRY;
+        }
+      }
+      for (const book of books) {
+        if (!sameConnection()) break;
+        const source = sharedCoverOrigin(book);
+        if (!source || !inBook(book).length || !sharedCoverEligible(book) || Date.now() < (sharedCoverCheckedAt.get(book) || 0)) continue;
+        const generation = episodeTitleGeneration.get(book) || 0;
+        try {
+          await applySharedNASCover(book, source);
+          if (sameConnection() && (episodeTitleGeneration.get(book) || 0) === generation && sharedCoverOrigin(book)?.folder === source.folder) sharedCoverCheckedAt.set(book, Date.now() + SHARED_COVER_INTERVAL);
+        } catch (error) {
+          const retry = error?.code === 'CANCELLED' ? 1000 : SHARED_COVER_RETRY;
+          sharedCoverCheckedAt.set(book, Date.now() + retry);
+          nextDelay = Math.min(nextDelay, retry);
+        }
+      }
+    } finally {
+      sharedCoverSweepRunning = false;
+      if (sharedCoverSweepWake && canAutoSyncSharedCovers()) {
+        sharedCoverSweepWake = false;
+        queueMicrotask(() => { void queueSharedCoverSync(); });
+      } else {
+        sharedCoverSweepWake = false;
+        const now = Date.now();
+        for (const due of sharedCoverCheckedAt.values()) if (due > now) nextDelay = Math.min(nextDelay, Math.max(1000, due - now));
+        if (sharedCoverDiscoveryAfter > now) nextDelay = Math.min(nextDelay, Math.max(1000, sharedCoverDiscoveryAfter - now));
+        scheduleSharedCoverSync(nextDelay);
+      }
+    }
   }
 
   async function bindNASOrigin(book, source, replace = false) {
@@ -475,12 +587,13 @@
     }
   }
 
-  function nasIdle() {
+  function nasIdle(forceCovers = false) {
     for (const book of new Set(chapters.map(chapter => chapter.book))) queueNASNameSync(book);
+    void queueSharedCoverSync(forceCovers);
   }
   function nasConnected() {
     nasNameRetryAfter.clear();
-    nasIdle();
+    nasIdle(true);
   }
   async function nasFolderLoaded(source) {
     for (const book of new Set(chapters.map(chapter => chapter.book))) {
@@ -489,6 +602,7 @@
         try { await bindNASOrigin(book, source, Boolean(origin)); } catch { showToast('NAS 원본 폴더를 저장하지 못했습니다. 다시 열어 주세요.'); }
       }
     }
+    void queueSharedCoverSync();
   }
 
   async function nasAlias(book, file, decoded) {
@@ -809,6 +923,7 @@
     $('themeColor').content = '#111214';
     document.title = '호율 시리즈 · 홈';
     window.scrollTo(0, 0);
+    void queueSharedCoverSync();
   }
 
   function openLibrary(book) {
@@ -873,6 +988,7 @@
     window.TextviewShelf?.show();
     $('themeColor').content = '#08090b';
     document.title = '호율 시리즈 · 보관함';
+    void queueSharedCoverSync();
   }
 
   function getRatio() {
@@ -1273,6 +1389,8 @@
     savePosition();
     setBusy(true);
     episodeTitleGeneration.set(book, (episodeTitleGeneration.get(book) || 0) + 1);
+    sharedCoverOrigins.delete(book);
+    sharedCoverCheckedAt.delete(book);
     pendingNASNames.delete(book);
     nasNameRetryAfter.delete(book);
     try {
@@ -1652,7 +1770,8 @@
   window.TextviewReaderLayout?.onChange(readerMoved);
   window.addEventListener('pagehide', savePosition);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') savePosition();
+    if (document.visibilityState === 'hidden') { savePosition(); clearTimeout(sharedCoverTimer); sharedCoverTimer = 0; }
+    else void queueSharedCoverSync();
   });
   window.addEventListener('resize', () => {
     // Ignore Safari address-bar height changes; restore only after a width change.
@@ -1661,7 +1780,7 @@
     if (readingActive && current && !switching) void changeSettings(() => {});
   });
   window.addEventListener('online', () => { void checkOffline(); renderHome(); nasConnected(); if (detailActive && detailBookName) void updateEpisodeTitles(detailBookName); else if (readingActive && current) void updateEpisodeTitles(current.book); });
-  window.addEventListener('offline', () => { renderOfflineStatus(); renderBookDetail(); });
+  window.addEventListener('offline', () => { clearTimeout(sharedCoverTimer); sharedCoverTimer = 0; renderOfflineStatus(); renderBookDetail(); });
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
   async function start() {

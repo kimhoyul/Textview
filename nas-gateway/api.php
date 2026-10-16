@@ -412,10 +412,11 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             'cover_download' => ['action', 'token'],
             'episode_titles' => ['action', 'productId', 'page'],
             'sync_episode_names' => ['action', 'folder', 'paths', 'productId', 'page', 'expectedTitle', 'expectedAuthor'],
-            'get_shared_cover' => ['action', 'folder'],
+            'get_shared_cover' => ['action', 'folder', 'revision'],
             default => throw nas_error('INVALID_REQUEST'),
         };
         foreach (array_keys($input) as $key) { if (!in_array($key, $allowed, true)) { throw nas_error('INVALID_REQUEST'); } }
+        if ($action === 'get_shared_cover') { $input['revision'] = nas_shared_cover_revision($input['revision'] ?? null); }
         nas_prepare_runtime($config);
         $ip = (string)($_SERVER['REMOTE_ADDR'] ?? 'unknown');
         $rate = new NasRateBucket($config, $ip);
@@ -520,7 +521,7 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
         if (!is_array($_SESSION['dsm'] ?? null)) { throw nas_error(isset($_SESSION['approval']) ? 'FORBIDDEN' : 'SESSION_EXPIRED'); }
         $client->restoreAuthentication($_SESSION['dsm']);
         if ($action === 'get_shared_cover') {
-            $result = nas_get_shared_cover($client, $input['folder'] ?? null);
+            $result = nas_get_shared_cover($client, $input['folder'] ?? null, $input['revision']);
             $_SESSION['last_seen'] = time();
             $result['expiresIn'] = nas_expiry($config, $_SESSION);
             nas_json($result);
