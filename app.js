@@ -57,6 +57,7 @@
   let positionTimer;
   let toastTimer;
   let lastRatio = 0;
+  let checkingReaderText = false;
   let layoutToken = 0;
   let pendingLayoutRatio = null;
   let lastWidth = innerWidth;
@@ -1166,6 +1167,19 @@
     renderReaderUI();
     renderBookDetail();
   }
+  async function refreshCurrentText() {
+    if (checkingReaderText || !db || !readingActive || !current || busy || switching || suppressPosition || document.querySelector('dialog[open]')) return;
+    const id = current.id;
+    checkingReaderText = true;
+    try {
+      const content = await dbRequest('texts', 'get', id);
+      // A restored page can still show an older DOM after another page saved.
+      // Reuse normal chapter loading, without writing a replacement TXT record.
+      if (!db || !readingActive || current?.id !== id || busy || switching || suppressPosition || document.querySelector('dialog[open]')) return;
+      if (typeof content?.text === 'string' && content.text !== $('reader').textContent) await openChapter(id);
+    } catch (error) { showToast('저장된 본문을 다시 확인하지 못했습니다. ' + explainError(error)); }
+    finally { checkingReaderText = false; }
+  }
   async function goChapter(offset) {
     if (!current || busy || switching) return;
     const list = inBook(current.book);
@@ -1770,9 +1784,11 @@
   window.addEventListener('scroll', readerMoved, { passive: true });
   window.TextviewReaderLayout?.onChange(readerMoved);
   window.addEventListener('pagehide', savePosition);
+  window.addEventListener('pageshow', () => { void refreshCurrentText(); });
+  document.addEventListener('textview:editorclosed', () => { void refreshCurrentText(); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') { savePosition(); clearTimeout(sharedCoverTimer); sharedCoverTimer = 0; }
-    else void queueSharedCoverSync();
+    else { void queueSharedCoverSync(); void refreshCurrentText(); }
   });
   window.addEventListener('resize', () => {
     // Ignore Safari address-bar height changes; restore only after a width change.
