@@ -57,6 +57,8 @@
   let positionTimer;
   let toastTimer;
   let lastRatio = 0;
+  let editingReader = false;
+  let readerEditContext = null;
   let checkingReaderText = false;
   let layoutToken = 0;
   let pendingLayoutRatio = null;
@@ -714,7 +716,7 @@
   }
 
   function showCoverPicker(book) {
-    if (busy || switching || suppressPosition || coverProcessing || !db || !window.TextviewCoverPicker || !inBook(book).length) return;
+    if (editingReader || busy || switching || suppressPosition || coverProcessing || !db || !window.TextviewCoverPicker || !inBook(book).length) return;
     savePosition();
     hideCoverPicker();
     coverBookName = book;
@@ -904,7 +906,7 @@
   }
 
   function showHome() {
-    if (busy || switching || suppressPosition || coverProcessing) return;
+    if (editingReader || busy || switching || suppressPosition || coverProcessing) return;
     savePosition();
     hideCoverPicker();
     readingActive = false;
@@ -928,7 +930,7 @@
   }
 
   function openLibrary(book) {
-    if (busy || switching || !db) return;
+    if (editingReader || busy || switching || !db) return;
     savePosition();
     $('chapterSearch').value = '';
     renderBooks(book || current?.book);
@@ -936,7 +938,7 @@
   }
 
   function showBookDetail(book, fromReader = false) {
-    if (busy || switching || suppressPosition || coverProcessing || !db || !window.TextviewBookDetail) return;
+    if (editingReader || busy || switching || suppressPosition || coverProcessing || !db || !window.TextviewBookDetail) return;
     if (!inBook(book).length) { showToast('작품을 찾지 못했습니다.'); return; }
     savePosition();
     if (!fromReader && !detailActive) detailReturn = shelfActive || coverActive ? 'shelf' : 'home';
@@ -970,7 +972,7 @@
   }
 
   function showShelf() {
-    if (busy || switching || suppressPosition || coverProcessing || !db) return;
+    if (editingReader || busy || switching || suppressPosition || coverProcessing || !db) return;
     savePosition();
     hideCoverPicker();
     readingActive = false;
@@ -1003,7 +1005,7 @@
   }
   function savePosition() {
     clearTimeout(positionTimer);
-    if (!readingActive || !current || suppressPosition || switching) return;
+    if (editingReader || !readingActive || !current || suppressPosition || switching) return;
     lastRatio = getRatio();
     writeState('position:' + current.id, { ratio: lastRatio });
   }
@@ -1019,7 +1021,7 @@
   }
   function seekReader(value, commit = false) {
     const layout = window.TextviewReaderLayout;
-    if (!db || !readingActive || !current || busy || switching || suppressPosition || layout?.getState().transitioning || !Number.isFinite(value)) return;
+    if (editingReader || !db || !readingActive || !current || busy || switching || suppressPosition || layout?.getState().transitioning || !Number.isFinite(value)) return;
     const ratio = clamp(value, 0, 1, 0);
     if (layout) layout.setRatio(ratio, { seek: true });
     else scrollToRatio(ratio);
@@ -1028,6 +1030,7 @@
     if (commit) savePosition();
   }
   function updateProgress() {
+    if (editingReader) return;
     if (!readingActive) { renderReaderUI(); return; }
     if (!current) { $('scrollProgress').textContent = '0%'; return; }
     const ratio = getRatio();
@@ -1037,7 +1040,7 @@
   }
 
   function showNAS() {
-    if (busy || switching || suppressPosition || coverProcessing) return;
+    if (editingReader || busy || switching || suppressPosition || coverProcessing) return;
     savePosition();
     hideCoverPicker();
     readingActive = false;
@@ -1063,7 +1066,7 @@
     const layout = window.TextviewReaderLayout?.getState() || {};
     window.TextviewReaderUI.render({ active: readingActive && !!current,
       backLabel: readerBackTarget === 'detail' ? '작품 상세로 돌아가기' : '보관함으로 돌아가기',
-      ready: !!db && !busy && !switching && !suppressPosition && !layout.transitioning, settings,
+      ready: !!db && !editingReader && !busy && !switching && !suppressPosition && !layout.transitioning, settings,
       chapterName: current ? displayChapterTitle(current, true) : '', bookName: current?.book || '',
       chapterId: current?.id || '', chapterNumber: current ? episodeNumber(current) || (index >= 0 ? index + 1 : null) : null,
       bookmarked: !!(current && readState('bookmark:' + current.id, null)),
@@ -1072,13 +1075,14 @@
   }
 
   function readerLayoutWillChange() {
-    if (!readingActive || switching || pendingLayoutRatio !== null || suppressPosition) return;
+    if (editingReader || !readingActive || switching || pendingLayoutRatio !== null || suppressPosition) return;
     pendingLayoutRatio = getRatio();
     suppressPosition = true;
     clearTimeout(positionTimer);
+    renderReaderUI();
   }
   async function readerLayoutChanged() {
-    if (!readingActive || switching) { pendingLayoutRatio = null; return; }
+    if (editingReader || !readingActive || switching) { pendingLayoutRatio = null; return; }
     const ratio = pendingLayoutRatio ?? lastRatio;
     const token = ++layoutToken;
     suppressPosition = true;
@@ -1095,6 +1099,7 @@
   }
 
   function readerMoved() {
+    if (editingReader) return;
     updateProgress();
     if (readingActive && current && !switching && !suppressPosition) {
       clearTimeout(positionTimer);
@@ -1103,8 +1108,51 @@
   }
   function frames() { return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); }
 
+  function beginReaderEditing() {
+    if (editingReader || !db || !readingActive || !current || busy || switching || suppressPosition ||
+        $('reader').hidden || $('reader').dataset.chapterId !== current.id || document.querySelector('dialog[open]')) return null;
+    const context = { id: current.id, ratio: getRatio(),
+      textOffset: window.TextviewReaderLayout?.getState().textOffset ?? null };
+    savePosition();
+    editingReader = true;
+    readerEditContext = context;
+    clearTimeout(positionTimer);
+    layoutToken++;
+    pendingLayoutRatio = null;
+    window.TextviewReaderUI?.closeSettings(false, false);
+    // Stop keyboard/resize reflows before the editor changes the viewport.
+    window.TextviewReaderLayout?.hide();
+    updateNavigation();
+    return context;
+  }
+
+  async function endReaderEditing(context) {
+    if (!editingReader || context !== readerEditContext) return;
+    try {
+      if (readingActive && current?.id === context.id) {
+        window.TextviewReaderLayout?.show();
+        await frames();
+        await window.TextviewReaderLayout?.reflow(context.ratio);
+        scrollToRatio(context.ratio);
+        await frames();
+      }
+    } catch (error) {
+      showToast('읽기 화면을 복원하지 못했습니다. ' + explainError(error));
+    } finally {
+      editingReader = false;
+      readerEditContext = null;
+      updateNavigation();
+      updateProgress();
+      savePosition();
+      void refreshCurrentText();
+    }
+  }
+
+  window.TextviewReaderEditing = { begin: beginReaderEditing, end: endReaderEditing,
+    isActive: () => editingReader };
+
   async function openChapter(id) {
-    if (switching || busy || suppressPosition || !db) return;
+    if (editingReader || switching || busy || suppressPosition || !db) return;
     const meta = chapters.find(chapter => chapter.id === id);
     if (!meta) return;
     savePosition();
@@ -1168,20 +1216,20 @@
     renderBookDetail();
   }
   async function refreshCurrentText() {
-    if (checkingReaderText || !db || !readingActive || !current || busy || switching || suppressPosition || document.querySelector('dialog[open]')) return;
+    if (editingReader || checkingReaderText || !db || !readingActive || !current || busy || switching || suppressPosition || document.querySelector('dialog[open]')) return;
     const id = current.id;
     checkingReaderText = true;
     try {
       const content = await dbRequest('texts', 'get', id);
       // A restored page can still show an older DOM after another page saved.
       // Reuse normal chapter loading, without writing a replacement TXT record.
-      if (!db || !readingActive || current?.id !== id || busy || switching || suppressPosition || document.querySelector('dialog[open]')) return;
+      if (editingReader || !db || !readingActive || current?.id !== id || busy || switching || suppressPosition || document.querySelector('dialog[open]')) return;
       if (typeof content?.text === 'string' && content.text !== $('reader').textContent) await openChapter(id);
     } catch (error) { showToast('저장된 본문을 다시 확인하지 못했습니다. ' + explainError(error)); }
     finally { checkingReaderText = false; }
   }
   async function goChapter(offset) {
-    if (!current || busy || switching) return;
+    if (editingReader || !current || busy || switching) return;
     const list = inBook(current.book);
     const index = list.findIndex(chapter => chapter.id === current.id) + offset;
     if (list[index]) await openChapter(list[index].id);
@@ -1202,7 +1250,7 @@
     renderReaderUI();
   }
   async function changeSettings(change) {
-    if (switching) return;
+    if (editingReader || switching) return;
     const ratio = lastRatio;
     const token = ++layoutToken;
     suppressPosition = true;
@@ -1267,7 +1315,7 @@
       progress.textContent = Math.round(ratioOf(chapter.id) * 100) + '%';
       button.append(name, progress);
       button.addEventListener('click', () => {
-        if (busy || switching) return;
+        if (editingReader || busy || switching) return;
         closeDialog('libraryDialog');
         void openChapter(chapter.id);
       });
@@ -1285,7 +1333,7 @@
     $('addToBookBtn').hidden = !shelfActive;
   }
   function openImport(book) {
-    if (!db || busy || switching || suppressPosition) return;
+    if (editingReader || !db || busy || switching || suppressPosition) return;
     if (!shelfActive) {
       showShelf();
       if (!shelfActive) return;
@@ -1320,7 +1368,7 @@
   }
 
   async function importFiles(files, options = {}) {
-    if (busy || !db || files.length === 0) return { added: 0, skipped: 0, failed: files.length, details: ['서재에 추가할 수 없습니다.'] };
+    if (editingReader || busy || !db || files.length === 0) return { added: 0, skipped: 0, failed: files.length, details: ['서재에 추가할 수 없습니다.'] };
     const book = ((options.bookName ?? $('bookName').value).trim() || '내 책').normalize('NFC').slice(0, 100);
     const encoding = options.encoding ?? $('encoding').value;
     const known = new Set(chapters.map(chapter => chapter.id));
@@ -1379,7 +1427,7 @@
   }
 
   async function importDownloaded(files, bookName, source = null) {
-    if (!db || busy || switching || suppressPosition) throw new Error('서재에 추가할 수 없습니다. 잠시 후 다시 시도해 주세요.');
+    if (editingReader || !db || busy || switching || suppressPosition) throw new Error('서재에 추가할 수 없습니다. 잠시 후 다시 시도해 주세요.');
     if (!Array.isArray(files) || !files.length || typeof bookName !== 'string') throw new Error('TXT 파일과 책 이름을 확인해 주세요.');
     if (files.some(file => !(file instanceof File) || !/\.txt$/i.test(file.name) || file.size > MAX_FILE_BYTES)) throw new Error('32 MB 이하의 TXT 파일만 추가할 수 있습니다.');
     const result = await importFiles(files, { bookName, encoding: 'auto', nasAlias: true });
@@ -1397,7 +1445,7 @@
   }
 
   async function deleteBook() {
-    if (busy || switching || !db) return;
+    if (editingReader || busy || switching || !db) return;
     const book = $('bookSelect').value;
     const list = inBook(book);
     if (!list.length || !confirm('“' + book + '”의 TXT ' + list.length + '개를 앱 책장에서 삭제할까요?\n파일 앱에 있는 원본은 삭제하지 않습니다.')) return;
@@ -1466,7 +1514,7 @@
   }
 
   async function makeBackup() {
-    if (busy || !db) return;
+    if (editingReader || busy || !db) return;
     savePosition();
     setBusy(true);
     $('backupStatus').textContent = '백업 파일 준비 중…';
@@ -1513,7 +1561,7 @@
   }
 
   async function restoreBackup(file) {
-    if (!file || busy || !db) return;
+    if (editingReader || !file || busy || !db) return;
     if (file.size > 200 * 1024 * 1024) { $('backupStatus').textContent = '백업은 200 MB까지 불러올 수 있습니다.'; return; }
     setBusy(true);
     $('backupStatus').textContent = '백업 확인 중…';
@@ -1691,7 +1739,7 @@
   }
 
   async function openHelp() {
-    if (busy || switching || !db) return;
+    if (editingReader || busy || switching || !db) return;
     if (!readingActive) {
       const id = current?.id || readState('last', null) || chapters[0]?.id;
       if (!id) { showToast('작품을 선택한 뒤 읽기 설정을 열어 주세요.'); return; }
@@ -1701,7 +1749,7 @@
   }
 
   function toggleBookmark() {
-    if (!readingActive || !current || busy || switching) return;
+    if (editingReader || !readingActive || !current || busy || switching) return;
     const key = 'bookmark:' + current.id;
     const marked = readState(key, null);
     writeState(key, marked ? null : { ratio: getRatio() });
@@ -1741,7 +1789,7 @@
       settings = normalizeSettings({ ...settings, ...patch });
     }),
     page: delta => {
-      if (readingActive && !busy && !switching && !suppressPosition) window.TextviewReaderLayout?.page(delta);
+      if (!editingReader && readingActive && !busy && !switching && !suppressPosition) window.TextviewReaderLayout?.page(delta);
     },
     seek: seekReader,
     layoutWillChange: readerLayoutWillChange, layoutChanged: readerLayoutChanged,
@@ -1760,7 +1808,7 @@
   $('lineBtn').addEventListener('click', () => { void changeSettings(() => { settings.lineHeight = nextSetting([1.6, 1.8, 1.9, 2.0, 2.2], settings.lineHeight); }); });
   $('paddingBtn').addEventListener('click', () => { void changeSettings(() => { settings.padding = nextSetting([14, 18, 22, 28, 34], settings.padding); }); });
   $('themeBtn').addEventListener('click', () => { void changeSettings(() => { settings.dark = !settings.dark; }); });
-  $('topBtn').addEventListener('click', () => { scrollToRatio(0); savePosition(); updateProgress(); });
+  $('topBtn').addEventListener('click', () => { if (!editingReader) { scrollToRatio(0); savePosition(); updateProgress(); } });
   $('helpBtn').addEventListener('click', openHelp);
   $('offlineStatus').addEventListener('click', openHelp);
   $('checkOfflineBtn').addEventListener('click', async () => {

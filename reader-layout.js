@@ -55,7 +55,7 @@
       effect: settings.pageEffect, pageEffect: settings.pageEffect,
       settings: { ...settings }, ratio: getRatio(), pageIndex,
       page: pageIndex + 1, pageNumber: pageIndex + 1, pageCount,
-      pageWidth, pageHeight, transitioning: false,
+      pageWidth, pageHeight, transitioning: false, textOffset: anchorOffset,
       canPrevious: pageIndex > 0, canNext: pageIndex < pageCount - 1
     };
   }

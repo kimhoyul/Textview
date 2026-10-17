@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="호율 시리즈">
   <meta name="description" content="TXT를 기기에 보관하고 인터넷 없이 읽는 개인 텍스트 뷰어">
-  <meta name="app-version" content="2.8.3">
+  <meta name="app-version" content="2.8.4">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/hoyul-flat-apple-touch.png">
   <link rel="icon" type="image/png" href="./icons/hoyul-flat-192.png">
@@ -48,12 +48,41 @@
     #chapterJumpBtn .progress-details { display: block; margin-top: 3px; font-size: 11px; white-space: nowrap; }
     #showControls { position: fixed; top: -160px; left: 12px; z-index: 80; }
     #showControls:focus { top: max(12px, env(safe-area-inset-top)); }
-    #editDialog { height: min(84dvh, 850px); max-height: min(84dvh, var(--editor-height, 850px)); }
-    #editDialog .dialog-body { display: flex; flex: 1; flex-direction: column; min-height: 0; padding-top: 10px; }
-    #editMeta { margin: 0 0 8px; overflow-wrap: anywhere; }
-    #editText { flex: 1; min-height: 90px; width: 100%; resize: none; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); color: var(--text); font: 17px/1.8 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif; overscroll-behavior: contain; }
-    #editText:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    #editError { margin: 8px 0 0; }
+    html.reader-editing-root, body.reader-editing { height: 100%; overflow: hidden; overscroll-behavior: none; }
+    body.reader-editing > :not(.reader-shell) { display: none !important; }
+    body.reader-editing .reader-viewport,
+    body.reader-editing #notice, body.reader-editing #empty { display: none !important; }
+    #readerEditor[hidden] { display: none !important; }
+    #readerEditor {
+      position: fixed; z-index: 90; top: var(--editor-top, 0px); left: 50%;
+      display: flex; flex-direction: column; width: min(100%, var(--reader-width, 760px));
+      height: var(--editor-height, 100dvh); min-height: 0; transform: translateX(-50%);
+      background: var(--bg); color: var(--text);
+    }
+    .reader-editor-header {
+      display: grid; grid-template-columns: 72px minmax(0, 1fr) 72px; align-items: center; gap: 8px;
+      flex: 0 0 auto; min-height: 58px; padding: max(8px, env(safe-area-inset-top))
+        max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+      border-bottom: 1px solid var(--reader-control-border); background: var(--reader-control-bg);
+    }
+    .reader-editor-heading { min-width: 0; text-align: center; }
+    #editTitle { margin: 0; font-size: 16px; line-height: 1.4; }
+    #editMeta { margin: 3px 0 0; color: var(--reader-control-muted); font-size: 11px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #readerEditor .reader-editor-header button { min-height: 44px; margin: 0; padding: 8px 12px; border: 0; background: transparent; color: var(--reader-control-text); font-size: 16px; }
+    #readerEditor #editSave { background: var(--reader-control-accent); color: #211729; font-weight: 700; border-radius: 9px; }
+    #editText {
+      display: block; flex: 1 1 0; min-height: 0; width: 100%; margin: 0; resize: none;
+      padding: var(--reader-vertical-padding, 12px) max(var(--reader-padding, 12px), env(safe-area-inset-right))
+        max(var(--reader-vertical-padding, 12px), env(safe-area-inset-bottom)) max(var(--reader-padding, 12px), env(safe-area-inset-left));
+      border: 0; border-radius: 0; outline: none; background: var(--bg); color: var(--text);
+      font-family: "Nanum Myeongjo", "AppleMyungjo", "Batang", serif;
+      font-size: max(16px, var(--font-size, 20px)); line-height: var(--line-height, 1.9); font-weight: 400;
+      white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere; caret-color: var(--reader-control-accent);
+      overflow-y: auto; overscroll-behavior: contain; -webkit-appearance: none; -webkit-overflow-scrolling: touch;
+    }
+    #readerEditor[data-wrap="character"] #editText { word-break: break-all; }
+    #editError { flex: 0 0 auto; margin: 0; padding: 10px 16px max(10px, env(safe-area-inset-bottom)); color: var(--reader-control-text); background: var(--reader-control-bg); font-size: 13px; line-height: 1.6; }
+    #editError:empty { display: none; }
     @media (prefers-reduced-motion: reduce) { body.reading .topbar, body.reading .bottombar { transition: none; } }
   </style>
 </head>
@@ -164,13 +193,17 @@
     let editorDB = null;
     let opening = false;
     let saving = false;
-    const editor = document.createElement('dialog');
-    editor.id = 'editDialog';
+    let closing = false;
+    let editContext = null;
+    let editorGeneration = 0;
+    const editor = document.createElement('section');
+    editor.id = 'readerEditor';
+    editor.hidden = true;
     editor.setAttribute('aria-labelledby', 'editTitle');
-    editor.innerHTML = '<div class="dialog-head"><h2 id="editTitle">본문 편집</h2><button id="editClose" type="button">닫기</button></div><div class="dialog-body"><p id="editMeta" class="small"></p><textarea id="editText" spellcheck="false" autocapitalize="off" aria-label="현재 TXT 본문"></textarea><p id="editError" class="small" role="status"></p></div><div class="dialog-actions"><button id="editCancel" type="button">취소</button><button id="editSave" class="primary" type="button">저장</button></div>';
-    document.body.appendChild(editor);
+    editor.innerHTML = '<header class="reader-editor-header"><button id="editCancel" type="button">취소</button><div class="reader-editor-heading"><h2 id="editTitle">본문 편집</h2><p id="editMeta"></p></div><button id="editSave" type="button">저장</button></header><textarea id="editText" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" aria-label="현재 TXT 본문"></textarea><p id="editError" role="status"></p>';
+    readerShell.appendChild(editor);
     function reading() { return !reader.hidden; }
-    function modalOpen() { return !!document.querySelector('dialog[open]'); }
+    function modalOpen() { return !editor.hidden || closing || !!document.querySelector('dialog[open]'); }
     function hasSelection() { return window.getSelection()?.isCollapsed === false; }
     function hideBars() {
       if (!reading() || modalOpen()) return;
@@ -192,8 +225,8 @@
     function syncReader() {
       const active = reading();
       document.body.classList.toggle('reading', active);
-      $('editBtn').disabled = !active || opening || saving || $('openBtn').disabled;
-      $('chapterJumpBtn').disabled = !active || opening || saving || $('chaptersBtn').disabled;
+      $('editBtn').disabled = !active || opening || saving || closing || !editor.hidden || $('openBtn').disabled;
+      $('chapterJumpBtn').disabled = !active || opening || saving || closing || !editor.hidden || $('chaptersBtn').disabled;
       let label = '화 선택';
       if (active) {
         label = $('title').textContent.trim();
@@ -371,12 +404,6 @@
         tx.onabort = () => reject(tx.error || request.error || new Error('본문을 읽지 못했습니다.'));
       });
     }
-    function ratio() {
-      if (window.TextviewReaderLayout?.getState().active) return window.TextviewReaderLayout.getRatio();
-      const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
-      if (!max) return 0;
-      return Math.max(0, Math.min(1, scrollY / max));
-    }
     function pinPosition() {
       if (!snapshot) return;
       const key = 'position:' + snapshot.meta.id;
@@ -395,36 +422,48 @@
     window.addEventListener('pagehide', pinPosition);
     document.addEventListener('visibilitychange', () => { if (document.hidden) pinPosition(); });
     function fitEditor() {
-      let height = innerHeight;
-      if (window.visualViewport) height = window.visualViewport.height;
-      editor.style.setProperty('--editor-height', Math.max(200, height - 24) + 'px');
+      if (editor.hidden) return;
+      editor.style.setProperty('--editor-height', Math.max(1, window.visualViewport?.height || innerHeight) + 'px');
+      editor.style.setProperty('--editor-top', Math.max(0, window.visualViewport?.offsetTop || 0) + 'px');
     }
-    if (window.visualViewport) window.visualViewport.addEventListener('resize', fitEditor);
+    window.addEventListener('resize', fitEditor);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', fitEditor);
+      window.visualViewport.addEventListener('scroll', fitEditor);
+    }
 
     async function openEditor() {
-      if (!reading() || opening || saving || modalOpen() || $('openBtn').disabled) return;
-      const chapterId = reader.dataset.chapterId;
+      if (!reading() || opening || saving || closing || modalOpen() || $('openBtn').disabled) return;
+      const context = window.TextviewReaderEditing?.begin();
+      if (!context) return;
+      editContext = context;
+      const generation = ++editorGeneration;
+      const chapterId = context.id;
       const book = $('subtitle').textContent;
       const title = $('title').textContent;
-      const savedRatio = ratio();
+      const savedRatio = context.ratio;
       opening = true;
-      syncReader();
       lastFocus = document.activeElement;
       $('editMeta').textContent = book + ' · ' + title;
       $('editText').value = '';
       $('editText').disabled = true;
       $('editSave').disabled = true;
+      $('editCancel').disabled = false;
       $('editError').textContent = '본문을 여는 중…';
+      editor.dataset.wrap = window.TextviewReaderLayout?.getState().settings.wrap || 'word';
+      editor.hidden = false;
+      document.body.classList.add('reader-editing');
+      document.documentElement.classList.add('reader-editing-root');
       fitEditor();
       clearFirstTap();
-      editor.showModal();
+      syncReader();
       let database;
       try {
         if (!chapterId) throw new Error('현재 화를 확인하지 못했습니다. 작품을 다시 열어 주세요.');
         database = await connect();
         const meta = await get(database, 'chapters', chapterId);
         const content = await get(database, 'texts', chapterId);
-        if (!editor.open) { database.close(); return; }
+        if (editor.hidden || generation !== editorGeneration) return;
         // The displayed title may gain a public subtitle. Identify the chapter
         // by its stable database key, and edit the persisted text, not the DOM.
         if (!reading() || reader.dataset.chapterId !== chapterId) throw new Error('현재 화가 바뀌었습니다. 닫은 뒤 편집 버튼을 다시 눌러 주세요.');
@@ -438,35 +477,53 @@
         $('editText').disabled = false;
         $('editSave').disabled = false;
         $('editError').textContent = '';
+        requestAnimationFrame(() => {
+          if (editor.hidden || generation !== editorGeneration) return;
+          const offset = Number.isInteger(context.textOffset) ? context.textOffset : Math.floor(original.length * savedRatio);
+          const cursor = Math.max(0, Math.min(original.length, offset));
+          $('editText').setSelectionRange(cursor, cursor);
+          $('editText').focus({ preventScroll: true });
+          $('editText').scrollTop = Math.max(0, $('editText').scrollHeight - $('editText').clientHeight) * savedRatio;
+        });
       } catch (error) {
-        $('editError').textContent = error?.message || '편집할 본문을 열지 못했습니다.';
+        if (!editor.hidden && generation === editorGeneration) $('editError').textContent = error?.message || '편집할 본문을 열지 못했습니다.';
       } finally {
         if (database) database.close();
-        opening = false;
-        syncReader();
+        if (generation === editorGeneration) { opening = false; syncReader(); }
       }
     }
-    function closeEditor() {
-      if (saving) return;
+    async function closeEditor() {
+      if (saving || closing || editor.hidden) return;
       if (snapshot && $('editText').value !== snapshot.text && !confirm('저장하지 않은 수정 내용을 버릴까요?')) return;
-      $('editText').blur();
-      editor.close();
-    }
-    editor.addEventListener('cancel', event => { event.preventDefault(); closeEditor(); });
-    editor.addEventListener('close', () => {
-      if (saving) return;
+      closing = true;
+      ++editorGeneration;
+      opening = false;
+      const context = editContext;
       pinPosition();
+      $('editText').blur();
+      editor.hidden = true;
+      document.body.classList.remove('reader-editing');
+      document.documentElement.classList.remove('reader-editing-root');
       if (editorDB) editorDB.close();
       editorDB = null;
       snapshot = null;
-      if (lastFocus?.isConnected) lastFocus.focus({ preventScroll: true });
-      document.dispatchEvent(new CustomEvent('textview:editorclosed'));
+      editContext = null;
+      try { await window.TextviewReaderEditing?.end(context); }
+      finally {
+        closing = false;
+        syncReader();
+        const target = lastFocus?.isConnected && lastFocus.getClientRects().length ? lastFocus : $('readerSettingsButton');
+        target?.focus({ preventScroll: true });
+        document.dispatchEvent(new CustomEvent('textview:editorclosed'));
+      }
+    }
+    editor.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); void closeEditor(); }
     });
     $('editBtn').addEventListener('click', () => { void openEditor(); });
-    $('editClose').addEventListener('click', closeEditor);
-    $('editCancel').addEventListener('click', closeEditor);
+    $('editCancel').addEventListener('click', () => { void closeEditor(); });
     window.addEventListener('beforeunload', event => {
-      if (!saving && editor.open && snapshot && $('editText').value !== snapshot.text) { event.preventDefault(); event.returnValue = ''; }
+      if (!saving && !editor.hidden && snapshot && $('editText').value !== snapshot.text) { event.preventDefault(); event.returnValue = ''; }
     });
     function commitEdit(item, text, bytes) {
       return new Promise((resolve, reject) => {
@@ -500,7 +557,7 @@
       if (bytes > 32 * 1024 * 1024) { $('editError').textContent = '본문은 32 MB까지 저장할 수 있습니다.'; return; }
       if (text === snapshot.text) { closeEditor(); return; }
       saving = true;
-      for (const id of ['editSave', 'editCancel', 'editClose', 'editText']) $(id).disabled = true;
+      for (const id of ['editSave', 'editCancel', 'editText']) $(id).disabled = true;
       $('editError').textContent = '저장 중…';
       try {
         await commitEdit(snapshot, text, bytes);
@@ -515,7 +572,7 @@
         if (error?.name === 'QuotaExceededError') $('editError').textContent = '저장 공간이 부족합니다. 수정 내용은 이 창에 남아 있습니다.';
         else $('editError').textContent = error?.message || '저장하지 못했습니다. 수정 내용을 복사해 보관해 주세요.';
         saving = false;
-        for (const id of ['editSave', 'editCancel', 'editClose', 'editText']) $(id).disabled = false;
+        for (const id of ['editSave', 'editCancel', 'editText']) $(id).disabled = false;
       }
     });
   });
