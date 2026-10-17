@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="호율 시리즈">
   <meta name="description" content="TXT를 기기에 보관하고 인터넷 없이 읽는 개인 텍스트 뷰어">
-  <meta name="app-version" content="2.8.1">
+  <meta name="app-version" content="2.8.2">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/hoyul-flat-apple-touch.png">
   <link rel="icon" type="image/png" href="./icons/hoyul-flat-192.png">
@@ -403,9 +403,9 @@
 
     async function openEditor() {
       if (!reading() || opening || saving || modalOpen() || $('openBtn').disabled) return;
+      const chapterId = reader.dataset.chapterId;
       const book = $('subtitle').textContent;
       const title = $('title').textContent;
-      const original = reader.textContent;
       const savedRatio = ratio();
       opening = true;
       syncReader();
@@ -420,20 +420,20 @@
       editor.showModal();
       let database;
       try {
+        if (!chapterId) throw new Error('현재 화를 확인하지 못했습니다. 작품을 다시 열어 주세요.');
         database = await connect();
-        let last = await get(database, 'state', 'last');
-        try {
-          const local = JSON.parse(localStorage.getItem(prefix + 'last') || 'null');
-          if (local && typeof local.updatedAt === 'number' && (!last || local.updatedAt >= last.updatedAt)) last = local;
-        } catch {}
-        if (typeof last?.value !== 'string') throw new Error('현재 화를 찾지 못했습니다. 책장에서 다시 열어 주세요.');
-        const meta = await get(database, 'chapters', last.value);
-        const content = await get(database, 'texts', last.value);
+        const meta = await get(database, 'chapters', chapterId);
+        const content = await get(database, 'texts', chapterId);
         if (!editor.open) { database.close(); return; }
-        if (!meta || !content || meta.book !== book || meta.name.replace(/\.txt$/i, '') !== title || content.text !== original || reader.textContent !== original) throw new Error('본문이 바뀌었습니다. 닫은 뒤 편집 버튼을 다시 눌러 주세요.');
+        // The displayed title may gain a public subtitle. Identify the chapter
+        // by its stable database key, and edit the persisted text, not the DOM.
+        if (!reading() || reader.dataset.chapterId !== chapterId) throw new Error('현재 화가 바뀌었습니다. 닫은 뒤 편집 버튼을 다시 눌러 주세요.');
+        if (!meta || meta.id !== chapterId || typeof content?.text !== 'string') throw new Error('저장된 본문을 찾지 못했습니다. 작품을 다시 열어 주세요.');
+        const original = content.text;
         snapshot = { meta, text: original, ratio: savedRatio };
         editorDB = database;
         database = null;
+        $('editMeta').textContent = meta.book + ' · ' + meta.name.replace(/\.txt$/i, '');
         $('editText').value = original;
         $('editText').disabled = false;
         $('editSave').disabled = false;

@@ -1129,6 +1129,7 @@
       window.TextviewShelf?.hide();
       applySettings();
       $('reader').textContent = content.text; // TXT is never interpreted as HTML.
+      $('reader').dataset.chapterId = meta.id;
       $('reader').hidden = false;
       $('empty').hidden = true;
       $('title').textContent = displayChapterTitle(meta, true);
