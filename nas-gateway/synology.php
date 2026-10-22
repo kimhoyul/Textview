@@ -118,6 +118,25 @@ final class SynologyResponse
         return $data;
     }
 
+    /** Read only the verified private buffer; never decode the whole image in RAM. */
+    public function comicImageInfo(): array
+    {
+        if (!rewind($this->stream)) { throw nas_error('NAS_UNREACHABLE'); }
+        $signature = fread($this->stream, 12);
+        $jpeg = is_string($signature) && str_starts_with($signature, "\xFF\xD8\xFF");
+        $png = is_string($signature) && str_starts_with($signature, "\x89PNG\r\n\x1A\n");
+        if (!$jpeg && !$png) { throw new GatewayError('COMIC_INVALID_IMAGE', 400, 'JPG 또는 PNG 이미지 파일만 가져올 수 있습니다.'); }
+        if (!fflush($this->stream)) { throw nas_error('NAS_UNREACHABLE'); }
+        try { $info = @getimagesize($this->path); } catch (Throwable) { $info = false; }
+        if (!is_array($info) || !is_int($info[0] ?? null) || !is_int($info[1] ?? null)
+            || ($info[2] ?? null) !== ($jpeg ? IMAGETYPE_JPEG : IMAGETYPE_PNG)
+            || $info[0] < 1 || $info[1] < 1 || $info[0] > 100000 || $info[1] > 100000
+            || $info[0] > intdiv(40000000, $info[1])) {
+            throw new GatewayError('COMIC_INVALID_IMAGE', 400, '이미지 크기 또는 형식을 확인해 주세요. 한 장은 4천만 픽셀까지 지원합니다.');
+        }
+        return ['type' => $jpeg ? 'image/jpeg' : 'image/png', 'width' => $info[0], 'height' => $info[1]];
+    }
+
     public function output(): void
     {
         if (!rewind($this->stream)) { throw nas_error('NAS_UNREACHABLE'); }
@@ -234,6 +253,21 @@ final class SynologyClient
     public static function isTxtPath(string $path): bool
     {
         return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'txt';
+    }
+
+    /** Keep COMIX's allowlist separate from the existing TXT and rename routes. */
+    public static function comicVisiblePath(string $path): bool
+    {
+        foreach (explode('/', trim($path, '/')) as $segment) {
+            if ($segment !== '' && (str_starts_with($segment, '.')
+                || in_array(strtolower($segment), ['@eadir', '#recycle', '#snapshot'], true))) { return false; }
+        }
+        return true;
+    }
+
+    public static function isComicImagePath(string $path): bool
+    {
+        return self::comicVisiblePath($path) && in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), ['jpg', 'jpeg', 'png'], true);
     }
 
     public function restoreAuthentication(array $state): void
@@ -592,6 +626,87 @@ final class SynologyClient
             throw nas_error('FORBIDDEN');
         }
         return ['path' => $path, 'name' => basename($path), 'size' => $size];
+    }
+
+    /** A non-recursive image view of the authenticated user's DSM directory. */
+    public function listComicEntries(string $path, int $offset, int $limit): array
+    {
+        self::validatePath($path);
+        if (!self::comicVisiblePath($path)) { throw nas_error('FORBIDDEN'); }
+        if ($offset < 0 || $offset > 10000000 || $limit < 1 || $limit > 100) { throw nas_error('INVALID_REQUEST'); }
+        $params = ['offset' => $offset, 'limit' => $limit, 'sort_by' => 'name', 'sort_direction' => 'asc',
+            'additional' => $path === '/' ? ['time'] : ['size', 'time']];
+        if ($path !== '/') { $params['folder_path'] = $path; }
+        $data = $this->jsonRequest('SYNO.FileStation.List', $path === '/' ? 'list_share' : 'list', $params, true);
+        $raw = $data[$path === '/' ? 'shares' : 'files'] ?? null;
+        if (!is_array($raw) || !array_is_list($raw) || count($raw) > $limit
+            || !is_int($data['total'] ?? null) || $data['total'] < 0
+            || ($raw === [] && $offset < $data['total'])) { throw nas_error('NAS_UNREACHABLE'); }
+        $entries = [];
+        foreach ($raw as $item) {
+            if (!is_array($item) || !is_string($item['name'] ?? null) || !is_bool($item['isdir'] ?? null)) { continue; }
+            try { $itemPath = self::validatePath($item['path'] ?? null, false); } catch (GatewayError) { continue; }
+            if (basename($itemPath) !== $item['name'] || !self::comicVisiblePath($itemPath)
+                || ($path === '/' && substr_count($itemPath, '/') !== 1)
+                || ($path !== '/' && dirname($itemPath) !== $path)
+                || (!$item['isdir'] && !self::isComicImagePath($itemPath))) { continue; }
+            $size = $item['additional']['size'] ?? 0;
+            if (!$item['isdir'] && (!is_int($size) || $size < 0)) { continue; }
+            $entry = ['name' => $item['name'], 'path' => $itemPath, 'isDir' => $item['isdir'], 'size' => is_int($size) ? max(0, $size) : 0];
+            $modified = $item['additional']['time']['mtime'] ?? null;
+            if (is_int($modified) && $modified >= 0) { $entry['modifiedAt'] = $modified * 1000; }
+            $entries[] = $entry;
+        }
+        // Offset advances across *all* DSM entries, including filtered TXT and sidecars.
+        return ['ok' => true, 'path' => $path, 'entries' => $entries, 'total' => $data['total'],
+            'offset' => $offset, 'nextOffset' => min($data['total'], $offset + count($raw)), 'limit' => $limit];
+    }
+
+    public function comicFileInfo(string $path): array
+    {
+        self::validatePath($path, false);
+        if (!self::isComicImagePath($path)) { throw nas_error('INVALID_REQUEST'); }
+        $data = $this->jsonRequest('SYNO.FileStation.List', 'getinfo', ['path' => [$path], 'additional' => ['size', 'perm']], true);
+        $items = $data['files'] ?? null;
+        $item = is_array($items) && count($items) === 1 ? ($items[0] ?? null) : null;
+        if (!is_array($item) || ($item['path'] ?? null) !== $path || ($item['name'] ?? null) !== basename($path)
+            || ($item['isdir'] ?? null) !== false || isset($item['code'])) { throw nas_error('FORBIDDEN'); }
+        $size = $item['additional']['size'] ?? null;
+        if (!is_int($size) || $size < 1) { throw nas_error('NAS_UNREACHABLE'); }
+        if ($size > 32 * 1024 * 1024 || $size > (int)$this->config['max_download_bytes']) {
+            throw new GatewayError('TOO_LARGE', 400, '만화 이미지 한 장은 32 MB까지 가져올 수 있습니다.');
+        }
+        $permission = $item['additional']['perm'] ?? [];
+        if (is_array($permission['acl'] ?? null) && array_key_exists('read', $permission['acl']) && $permission['acl']['read'] !== true) {
+            throw nas_error('FORBIDDEN');
+        }
+        return ['path' => $path, 'name' => basename($path), 'size' => $size];
+    }
+
+    public function downloadComic(string $path): SynologyResponse
+    {
+        $info = $this->comicFileInfo($path);
+        $maximum = min(32 * 1024 * 1024, (int)$this->config['max_download_bytes']);
+        $response = $this->request('SYNO.FileStation.Download', 'download', ['path' => [$path], 'mode' => 'download'], true, true, null, $maximum);
+        try {
+            $mime = strtolower(trim(explode(';', $response->contentType)[0]));
+            if (($mime === 'application/json' || str_ends_with($mime, '+json'))
+                && preg_match('/^attachment(?:;|$)/i', $response->contentDisposition) !== 1) {
+                if ($response->bytes > (int)$this->config['max_json_bytes']) { throw nas_error('NAS_UNREACHABLE'); }
+                $body = $response->json((int)$this->config['max_json_bytes']);
+                self::checkApiResult($body);
+                throw nas_error('NAS_UNREACHABLE');
+            }
+            if ($response->httpStatus !== 200) {
+                throw nas_error(in_array($response->httpStatus, [401, 403, 404], true) ? 'FORBIDDEN' : 'NAS_UNREACHABLE');
+            }
+            if ($response->bytes !== $info['size'] || $response->bytes > $maximum) { throw nas_error('NAS_UNREACHABLE'); }
+            $image = $response->comicImageInfo();
+            $expected = strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'png' ? 'image/png' : 'image/jpeg';
+            if ($image['type'] !== $expected) { throw new GatewayError('COMIC_INVALID_IMAGE', 400, '파일 확장자와 이미지 형식이 다릅니다.'); }
+            $response->contentType = $image['type'];
+            return $response;
+        } catch (Throwable $error) { $response->close(); throw $error; }
     }
 
     /** The shared cover reader never relies on PHP's filesystem permissions. */

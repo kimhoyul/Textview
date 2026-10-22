@@ -1,7 +1,7 @@
 /* Update VERSION whenever any app-shell file changes. TXT lives in IndexedDB,
    not this cache; an app update must never clear the bookshelf database. */
 'use strict';
-const VERSION = '2.8.4';
+const VERSION = '2.9.0';
 const SCOPE = self.registration.scope;
 const PREFIX = 'offline-txt-shell:' + encodeURIComponent(SCOPE) + ':';
 const CACHE = PREFIX + VERSION;
@@ -13,6 +13,7 @@ const FILES = ['index.html', 'styles.css', 'app.js', 'home.css', 'home-ui.js', '
   'reader.css', 'reader-controls.js', 'reader-layout.js',
   'fonts/NanumMyeongjo-Regular.ttf', 'fonts/OFL-NanumMyeongjo.txt',
   'nas.css', 'nas-ui.js',
+  'comic.css', 'comic-ui.js', 'comic-store.js', 'comic-reader.js', 'comic-reader.css',
   'icons/hoyul-flat-192.png', 'icons/hoyul-flat-512.png', 'icons/hoyul-flat-apple-touch.png'];
 const URLS = FILES.map(path => new URL(path, SCOPE).href);
 const HOME = new URL('index.html', SCOPE).href;

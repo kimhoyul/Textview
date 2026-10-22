@@ -2,7 +2,7 @@
   "id": "./",
   "name": "호율 시리즈",
   "short_name": "호율 시리즈",
-  "description": "TXT를 기기에 저장해 인터넷 없이 읽는 개인 책장",
+  "description": "소설 TXT와 만화 이미지를 기기에 저장해 인터넷 없이 읽는 개인 책장",
   "lang": "ko",
   "start_url": "./index.html",
   "scope": "./",

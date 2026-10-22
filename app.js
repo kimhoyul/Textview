@@ -905,6 +905,25 @@
     void updateLegacyCoverMetadata(books);
   }
 
+  function openComix() {
+    if (editingReader || busy || switching || suppressPosition || coverProcessing || !window.HoyulComix) return;
+    savePosition();
+    hideCoverPicker();
+    readingActive = false;
+    shelfActive = false;
+    nasActive = false;
+    detailActive = false;
+    detailBookName = null;
+    window.TextviewBookDetail?.hide();
+    window.TextviewNAS?.hide();
+    window.TextviewReaderUI?.hide();
+    window.TextviewReaderLayout?.hide();
+    window.TextviewHome?.hide();
+    window.TextviewShelf?.hide();
+    $('reader').hidden = true;
+    void window.HoyulComix.show();
+  }
+
   function showHome() {
     if (editingReader || busy || switching || suppressPosition || coverProcessing) return;
     savePosition();
@@ -1768,8 +1787,9 @@
   if (window.TextviewHome) window.TextviewHome.actions = {
     openChapter: id => { void openChapter(id); }, openNAS: showNAS,
     openBook: showBookDetail, openLibrary: showShelf,
-    openImport: () => openImport(), openHelp, showHome, notify: showToast
+    openImport: () => openImport(), openHelp, showHome, openComix, notify: showToast
   };
+  if (window.HoyulComix) window.HoyulComix.actions = { openNovel: () => { window.HoyulComix.hide(); showHome(); }, notify: showToast };
   if (window.TextviewShelf) window.TextviewShelf.actions = {
     openBook: showCoverPicker, manageBook: openLibrary, openImport: () => openImport(), openHelp,
     showHome, notify: showToast
@@ -1826,7 +1846,7 @@
     catch (error) { if (error.name !== 'AbortError') $('backupStatus').textContent = explainError(error); }
   });
   document.querySelectorAll('dialog').forEach(dialog => {
-    dialog.querySelector('[data-close]').addEventListener('click', () => dialog.close());
+    dialog.querySelector('[data-close]')?.addEventListener('click', () => dialog.close());
     dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
   });
   window.addEventListener('scroll', readerMoved, { passive: true });
@@ -1875,6 +1895,7 @@
         sessionStorage.removeItem(PREFIX + 'returnToReader');
       } catch { /* Normal launches still show Home when sessionStorage is blocked. */ }
       if (returnToReader && chapters.some(chapter => chapter.id === returnToReader)) await openChapter(returnToReader);
+      else if (new URL(location.href).searchParams.get('mode') === 'comix') openComix();
       else showHome();
     } catch (error) {
       db = null;

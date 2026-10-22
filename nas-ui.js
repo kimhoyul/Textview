@@ -124,10 +124,12 @@
   let nameSyncHealth = null;
   let idleTimer = 0;
   let pendingConnected = false;
+  let comicContext = null;
   const selected = new Map();
   const sharedCoverRequests = new Map();
   const sharedCoverContexts = new WeakMap();
-  const api = { actions: {}, render, show, hide, setEndpoint, getEndpoint: () => endpoint, canSyncEpisodeNames, syncEpisodeNames, canSyncSharedCovers, findSharedCoverOrigins, getSharedCover, isSharedCoverCurrent };
+  const api = { actions: {}, render, show, hide, setEndpoint, getEndpoint: () => endpoint, canSyncEpisodeNames, syncEpisodeNames, canSyncSharedCovers, findSharedCoverOrigins, getSharedCover, isSharedCoverCurrent,
+    canBrowseComics, listComicFolder, downloadComicPage, setComicContext, showForComics };
   window.TextviewNAS = api;
 
   class NASError extends Error {
@@ -146,6 +148,7 @@
     NAS_UNREACHABLE: 'NAS에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.',
     INVALID_REQUEST: '요청을 처리하지 못했습니다. 다시 시도해 주세요.',
     TOO_LARGE: '32 MB 이하의 TXT 파일만 가져올 수 있습니다.',
+    COMIC_INVALID_IMAGE: 'JPG 또는 PNG 이미지 파일을 확인해 주세요.',
     RATE_LIMITED: '요청이 많습니다. 잠시 후 다시 시도해 주세요.',
     NOT_INSTALLED: 'NAS 연결 파일을 먼저 설치해 주세요.',
     NETWORK_ERROR: 'NAS에 연결하지 못했습니다. 주소와 인터넷 연결을 확인해 주세요.',
@@ -177,7 +180,8 @@
   }
   function notify(text) { api.actions.notify?.(text); }
   function runAction(name, ...args) {
-    const action = api.actions[name];
+    const action = comicContext && name === 'showHome' ? comicContext.onHome
+      : comicContext && name === 'showShelf' ? comicContext.onShelf : api.actions[name];
     if (typeof action !== 'function') return;
     try { Promise.resolve(action(...args)).catch(() => notify('요청을 처리하지 못했습니다.')); }
     catch (_) { notify('요청을 처리하지 못했습니다.'); }
@@ -187,7 +191,7 @@
     const generation = sequence;
     idleTimer = setTimeout(() => {
       idleTimer = 0;
-      if (generation !== sequence || !canSyncEpisodeNames()) return;
+      if (generation !== sequence || comicContext || !canSyncEpisodeNames()) return;
       if (pendingConnected) { pendingConnected = false; runAction('nasConnected'); }
       if (canSyncEpisodeNames()) runAction('nasIdle');
     }, 0);
@@ -315,10 +319,11 @@
       if (!response.ok) throw await responseError(response);
       const contentType = response.headers.get('Content-Type') || '';
       if (options.binary && !/\bjson\b/i.test(contentType)) {
-        if (!/^(application\/octet-stream|text\/plain)\b/i.test(contentType)) throw failure('NAS_UNREACHABLE');
+        if (!/^(application\/octet-stream|text\/plain)\b/i.test(contentType)
+            && !(options.binaryBlob && /^image\/(jpeg|png)\b/i.test(contentType))) throw failure('NAS_UNREACHABLE');
         const contentLength = Number(response.headers.get('Content-Length'));
         if (Number.isFinite(contentLength) && contentLength > MAX_FILE_BYTES) throw failure('TOO_LARGE');
-        let buffer;
+        let buffer, blob;
         if (response.body?.getReader) {
           const reader = response.body.getReader();
           const chunks = [];
@@ -333,19 +338,26 @@
               options.onProgress?.(length);
             }
           } finally { reader.releaseLock(); }
-          const bytes = new Uint8Array(length);
-          let offset = 0;
-          chunks.forEach(chunk => { bytes.set(chunk, offset); offset += chunk.byteLength; });
-          buffer = bytes.buffer;
+          if (options.binaryBlob) blob = new Blob(chunks, { type: 'application/octet-stream' });
+          else {
+            const bytes = new Uint8Array(length);
+            let offset = 0;
+            chunks.forEach(chunk => { bytes.set(chunk, offset); offset += chunk.byteLength; });
+            buffer = bytes.buffer;
+          }
         } else {
-          buffer = await response.arrayBuffer();
-          if (buffer.byteLength > MAX_FILE_BYTES) throw failure('TOO_LARGE');
-          options.onProgress?.(buffer.byteLength);
+          if (options.binaryBlob) blob = await response.blob();
+          else buffer = await response.arrayBuffer();
+          const length = options.binaryBlob ? blob.size : buffer.byteLength;
+          if (length > MAX_FILE_BYTES) throw failure('TOO_LARGE');
+          options.onProgress?.(length);
         }
+        if (options.binaryBlob && (!blob.size || (Number.isFinite(contentLength) && contentLength > 0 && contentLength !== blob.size))) throw failure('NAS_UNREACHABLE');
         if (requestGeneration === sequence && !controller.signal.aborted && !parentSignal?.aborted) {
           refreshSessionExpiry(response.headers.get('X-Textview-Session-Expires-In'), true);
         }
-        return { buffer, filename: response.headers.get('X-Textview-Filename') };
+        return options.binaryBlob ? { blob, filename: response.headers.get('X-Textview-Filename') }
+          : { buffer, filename: response.headers.get('X-Textview-Filename') };
       }
       let data;
       try {
@@ -441,7 +453,10 @@
       }
     } catch (error) { if (operation.generation === sequence) handleError(error); }
     finally { finishOperation(operation); }
-    if (visible && authenticated && operation.generation === sequence) void loadDirectory(currentPath);
+    if (visible && authenticated && operation.generation === sequence) {
+      if (notifyComicConnected()) return;
+      void loadDirectory(currentPath);
+    }
   }
 
   function setOtpOpen(open) {
@@ -615,7 +630,107 @@
       finishOperation(operation);
       if (operation.generation === sequence && otpRequired && visible) $('nasOtp').focus({ preventScroll: false });
     }
-    if (success && visible) { window.scrollTo(0, 0); void loadDirectory('/'); }
+    if (success && visible) {
+      if (notifyComicConnected()) return;
+      window.scrollTo(0, 0); void loadDirectory('/');
+    }
+  }
+
+  function canBrowseComics() {
+    return authenticated && !!sessionToken && !!csrfToken && !busy && !importInProgress
+      && (!sessionExpiresAt || Date.now() < sessionExpiresAt);
+  }
+
+  function comicPath(path, root = true) {
+    if (typeof path !== 'string' || !path.startsWith('/') || path.length > 4096
+        || /[\\\u0000-\u001f\u007f]/.test(path) || (!root && path === '/')) throw failure('INVALID_REQUEST');
+    if (path === '/') return path;
+    if (path.split('/').slice(1).some(segment => !segment || segment === '.' || segment === '..'
+        || segment.startsWith('.') || ['@eadir', '#recycle', '#snapshot'].includes(segment.toLowerCase()))) throw failure('INVALID_REQUEST');
+    return path;
+  }
+
+  async function comicRequest(action, payload, options = {}) {
+    if (!canBrowseComics()) throw failure(authenticated && (!sessionExpiresAt || Date.now() < sessionExpiresAt)
+      ? 'INVALID_REQUEST' : 'SESSION_EXPIRED', busy ? '다른 NAS 요청이 끝난 뒤 다시 시도해 주세요.' : undefined);
+    const context = { sequence, endpoint, session: sessionToken, csrf: csrfToken };
+    const matches = () => context.sequence === sequence && context.endpoint === endpoint
+      && context.session === sessionToken && context.csrf === csrfToken && authenticated;
+    try {
+      const data = await request(action, payload, options);
+      if (!matches() || options.signal?.aborted) throw failure('CANCELLED');
+      return data;
+    } catch (error) {
+      if (error?.code === 'SESSION_EXPIRED' && matches()) resetSession();
+      if (error?.code === 'TOO_LARGE') throw failure('TOO_LARGE', '만화 이미지 한 장은 32 MB까지 가져올 수 있습니다.');
+      if (error?.code === 'INVALID_REQUEST') throw failure('INVALID_REQUEST', 'NAS 연결 서버 업데이트가 필요합니다. 업데이트 후 다시 연결해 주세요.');
+      throw error;
+    }
+  }
+
+  async function listComicFolder(path, { signal, offset = 0, limit = PAGE_LIMIT } = {}) {
+    comicPath(path);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10000000
+        || !Number.isSafeInteger(limit) || limit < 1 || limit > PAGE_LIMIT) throw failure('INVALID_REQUEST');
+    const data = await comicRequest('comic_list', { path, offset, limit }, { signal, maxJSONBytes: 2 * 1024 * 1024 });
+    if (data.path !== path || data.offset !== offset || !Number.isSafeInteger(data.total) || data.total < 0
+        || !Number.isSafeInteger(data.nextOffset) || data.nextOffset < Math.min(offset, data.total)
+        || data.nextOffset > Math.min(data.total, offset + limit) || (data.nextOffset <= offset && data.nextOffset < data.total)
+        || !Array.isArray(data.entries) || data.entries.length > limit) throw failure('INVALID_REQUEST');
+    const seen = new Set();
+    const images = data.entries.map(entry => {
+      if (!entry || typeof entry.name !== 'string' || typeof entry.path !== 'string' || typeof entry.isDir !== 'boolean'
+          || !Number.isSafeInteger(entry.size) || entry.size < 0) throw failure('INVALID_REQUEST');
+      comicPath(entry.path, false);
+      if (basename(entry.path) !== entry.name || parentPath(entry.path) !== path || seen.has(entry.path)
+          || (!entry.isDir && !/\.(jpe?g|png)$/i.test(entry.name))) throw failure('INVALID_REQUEST');
+      seen.add(entry.path);
+      return { name: entry.name, path: entry.path, isDir: entry.isDir, size: entry.size,
+        ...(Number.isSafeInteger(entry.modifiedAt) && entry.modifiedAt >= 0 ? { modifiedAt: entry.modifiedAt } : {}) };
+    });
+    return { entries: sortEntries(images), total: data.total, nextOffset: data.nextOffset, path: data.path };
+  }
+
+  async function downloadComicPage(path, { signal, onProgress } = {}) {
+    comicPath(path, false);
+    if (!/\.(jpe?g|png)$/i.test(path)) throw failure('INVALID_REQUEST');
+    const context = { sequence, endpoint, session: sessionToken, csrf: csrfToken };
+    const data = await comicRequest('comic_download', { path }, { signal, onProgress, binary: true, binaryBlob: true });
+    const signature = new Uint8Array(await data.blob.slice(0, 12).arrayBuffer());
+    if (signal?.aborted || !canBrowseComics() || context.sequence !== sequence || context.endpoint !== endpoint
+        || context.session !== sessionToken || context.csrf !== csrfToken) throw failure('CANCELLED');
+    const png = signature.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((byte, i) => signature[i] === byte);
+    const jpeg = signature.length >= 3 && signature[0] === 255 && signature[1] === 216 && signature[2] === 255;
+    if ((!png && !jpeg) || (/\.png$/i.test(path) ? !png : !jpeg)) throw failure('COMIC_INVALID_IMAGE');
+    return new Blob([data.blob], { type: png ? 'image/png' : 'image/jpeg' });
+  }
+
+  function setComicContext(context) {
+    comicContext = context && typeof context === 'object' ? {
+      onConnected: typeof context.onConnected === 'function' ? context.onConnected : null,
+      onHome: typeof context.onHome === 'function' ? context.onHome : null,
+      onShelf: typeof context.onShelf === 'function' ? context.onShelf : null,
+      notified: false,
+    } : null;
+  }
+
+  function notifyComicConnected() {
+    if (!comicContext || !visible || !canBrowseComics()) return false;
+    pendingConnected = false;
+    if (comicContext.notified) return true;
+    comicContext.notified = true;
+    const callback = comicContext.onConnected;
+    if (callback) {
+      try { Promise.resolve(callback()).catch(() => notify('만화 폴더를 열지 못했습니다.')); }
+      catch (_) { notify('만화 폴더를 열지 못했습니다.'); }
+    }
+    return true;
+  }
+
+  function showForComics(context = {}) {
+    setComicContext(context);
+    showConnection();
+    if (canBrowseComics()) notifyComicConnected();
   }
 
   function basename(path) { return path.split('/').filter(Boolean).pop() || '내 책'; }
@@ -1341,6 +1456,10 @@
 
   function render(data = {}) { ready = Boolean(data.ready); updateView(); }
   function show() {
+    comicContext = null;
+    showConnection();
+  }
+  function showConnection() {
     if (visible) { updateView(); return; }
     visible = true;
     screen.hidden = false;
@@ -1356,6 +1475,7 @@
     if (visible) savedScroll = window.scrollY;
     if (approvalPending) void cancelApproval(false);
     visible = false;
+    comicContext = null;
     ++sequence;
     activeController?.abort();
     activeController = null;
@@ -1410,7 +1530,7 @@
     if (button.dataset.nasAuthMode) { if (!busy) setAuthMode(button.dataset.nasAuthMode); return; }
     if (button.dataset.nasPath) { if (locationMenuOpen) closeLocationMenu(); void loadDirectory(button.dataset.nasPath); return; }
     switch (button.dataset.nasAction) {
-      case 'back': if (authenticated && currentPath !== '/') void loadDirectory(parentPath(currentPath)); else runAction('showHome'); break;
+      case 'back': if (!comicContext && authenticated && currentPath !== '/') void loadDirectory(parentPath(currentPath)); else runAction('showHome'); break;
       case 'home': runAction('showHome'); break;
       case 'shelf': runAction('showShelf'); break;
       case 'otp': setOtpOpen($('nasOtpField').hidden); if (!$('nasOtpField').hidden) $('nasOtp').focus(); break;

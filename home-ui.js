@@ -23,9 +23,8 @@
         <h1 class="home-visually-hidden">호율 시리즈</h1>
         <div class="home-brand-tabs" role="tablist" aria-label="콘텐츠 종류">
           <button id="homeNovelTab" type="button" role="tab" class="is-active" aria-selected="true" aria-controls="homeNovelPanel" data-home-action="novel">NOVEL</button>
-          <button id="homeComixTab" type="button" role="tab" aria-selected="false" aria-describedby="homeComixHint" tabindex="-1" data-home-action="comix">COMIX</button>
+          <button id="homeComixTab" type="button" role="tab" aria-selected="false" tabindex="-1" data-home-action="comix">COMIX</button>
         </div>
-        <span id="homeComixHint" class="home-visually-hidden">준비 중</span>
         <div class="home-header-actions">
           <button class="home-icon-button" id="homeSearchToggle" type="button" data-home-action="search" aria-label="보관함 검색" aria-controls="homeSearchPanel" aria-expanded="false">${svg('search')}</button>
         </div>
@@ -341,7 +340,7 @@
     else if (action === 'nas') runAction('openNAS');
     else if (action === 'search') setSearch(!searchOpen);
     else if (action === 'close-search') setSearch(false);
-    else if (action === 'comix') runAction('notify', 'COMIX는 준비 중입니다.');
+    else if (action === 'comix') runAction('openComix');
     else if (action === 'novel') {
       $('homeNovelTab').tabIndex = 0;
       $('homeComixTab').tabIndex = -1;

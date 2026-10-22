@@ -386,7 +386,7 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             nas_json(['ok' => true, 'ready' => $phpReady && $curlReady && $sessionReady,
                 'php' => PHP_VERSION, 'curl' => $curlReady, 'session' => $sessionReady,
                 'gatewayVersion' => (string)($config['gateway_version'] ?? 'nas6'),
-                'coverSearch' => nas_cover_available(), 'episodeTitles' => nas_episode_available(), 'episodeRename' => nas_episode_available(), 'sharedCover' => true]);
+                'coverSearch' => nas_cover_available(), 'episodeTitles' => nas_episode_available(), 'episodeRename' => nas_episode_available(), 'sharedCover' => true, 'comicFiles' => true]);
         }
         if (nas_cors($config)) { return; }
         if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
@@ -408,6 +408,8 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             'login' => ['action', 'username', 'password', 'otp', 'authMode'],
             'list' => ['action', 'path', 'offset', 'limit'],
             'download' => ['action', 'path'],
+            'comic_list' => ['action', 'path', 'offset', 'limit'],
+            'comic_download' => ['action', 'path'],
             'cover_search' => ['action', 'query'],
             'cover_download' => ['action', 'token'],
             'episode_titles' => ['action', 'productId', 'page'],
@@ -418,11 +420,13 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
         foreach (array_keys($input) as $key) { if (!in_array($key, $allowed, true)) { throw nas_error('INVALID_REQUEST'); } }
         if ($action === 'get_shared_cover') { $input['revision'] = nas_shared_cover_revision($input['revision'] ?? null); }
         nas_prepare_runtime($config);
-        $ip = (string)($_SERVER['REMOTE_ADDR'] ?? 'unknown');
-        $rate = new NasRateBucket($config, $ip);
-        $rate->consume($action);
-        if ($action === 'login') { $rate->checkLogin(); }
-        else { $rate->close(); $rate = null; }
+        if (!in_array($action, ['download', 'comic_download'], true)) {
+            $ip = (string)($_SERVER['REMOTE_ADDR'] ?? 'unknown');
+            $rate = new NasRateBucket($config, $ip);
+            $rate->consume($action);
+            if ($action === 'login') { $rate->checkLogin(); }
+            else { $rate->close(); $rate = null; }
+        }
         $origin = nas_request_header('Origin');
         nas_start_session($config, $origin, $action === 'bootstrap', $transport);
         if ($action === 'bootstrap') { nas_json(nas_status($config, true)); }
@@ -534,26 +538,27 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             $result['expiresIn'] = nas_expiry($config, $_SESSION);
             nas_json($result);
         }
-        if ($action === 'list') {
+        if ($action === 'list' || $action === 'comic_list') {
             $path = SynologyClient::validatePath($input['path'] ?? '/');
             $offset = $input['offset'] ?? 0;
             $limit = $input['limit'] ?? 100;
             if (!is_int($offset) || $offset < 0 || $offset > 10000000 || !is_int($limit) || $limit < 1 || $limit > 100) { throw nas_error('INVALID_REQUEST'); }
-            $listing = $client->listEntries($path, $offset, $limit);
+            $listing = $action === 'comic_list' ? $client->listComicEntries($path, $offset, $limit) : $client->listEntries($path, $offset, $limit);
             $_SESSION['last_seen'] = time();
             $listing['expiresIn'] = nas_expiry($config, $_SESSION);
             nas_json($listing);
         }
-        if ($action === 'download') {
+        if ($action === 'download' || $action === 'comic_download') {
             $path = SynologyClient::validatePath($input['path'] ?? null, false);
             $downloadContext = ['id' => session_id(), 'origin' => $_SESSION['origin'], 'csrf' => $_SESSION['csrf'],
                 'sid' => $_SESSION['dsm']['sid'], 'created_at' => $_SESSION['created_at'], 'last_seen' => $_SESSION['last_seen']];
             // The authenticated client owns a copy of the DSM credentials. Release
             // the PHP lock before getinfo/download so status and logout can proceed.
             if (!session_write_close()) { throw nas_error('NAS_UNREACHABLE'); }
-            $download = $client->download($path);
-            header('Content-Type: application/octet-stream');
-            header("Content-Disposition: attachment; filename=\"download.txt\"; filename*=UTF-8''" . rawurlencode(basename($path)));
+            $download = $action === 'comic_download' ? $client->downloadComic($path) : $client->download($path);
+            header('Content-Type: ' . ($action === 'comic_download' ? $download->contentType : 'application/octet-stream'));
+            $fallbackName = $action === 'comic_download' ? (str_ends_with(strtolower($path), '.png') ? 'page.png' : 'page.jpg') : 'download.txt';
+            header('Content-Disposition: attachment; filename="' . $fallbackName . '"; filename*=UTF-8\'\'' . rawurlencode(basename($path)));
             header('X-Textview-Filename: ' . rawurlencode(basename($path)));
             header('X-Textview-Session-Expires-In: ' . nas_expiry($config, $downloadContext));
             header('Content-Length: ' . $download->bytes);
