@@ -74,6 +74,8 @@ body.comix-visible > .reader-shell, body.comix-visible > #showControls { display
 .cx-folder-icon { color:#c5acee; background:transparent; }
 .cx-import-dock { position:sticky; bottom:0; padding:13px 20px max(13px,env(safe-area-inset-bottom)); border-top:1px solid #313139; background:#15151bea; backdrop-filter:blur(15px); }
 .cx-import-dock button { width:100%; }
+.cx-import-dock-note { text-align:center; color:#a5a1af; font-size:12px; margin:9px 0 0 !important; }
+#comixScreen .cx-import-current { display:block; margin:8px auto 0; color:#c6b2e4; font-size:13px; }
 .cx-error { color:#edb2c0; padding:14px 20px; font-size:13px; }
 .cx-busy { color:#c5acee; padding:14px 20px; font-size:13px; }
 #comixImport { color:#f3f3f6; background:#1b1b20; border:1px solid #38343f; border-radius:18px; width:min(430px,calc(100vw - 32px)); padding:24px; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif; }
@@ -85,6 +87,8 @@ body.comix-visible > .reader-shell, body.comix-visible > #showControls { display
 .cx-dialog-actions { display:flex; gap:10px; margin-top:24px; }
 .cx-dialog-actions button { flex:1; }
 #comixImport progress { display:block; width:100%; accent-color:#c5acee; margin-top:18px; height:6px; }
+#cxImportVolumes { list-style:none; margin:16px 0; padding:0; max-height:180px; overflow-y:auto; color:#d4cedd; font-size:13px; }
+#cxImportVolumes li { padding:9px 0; border-bottom:1px solid #35313c; }
 @media(min-width:600px) { .cx-hero{min-height:350px}.cx-hero-copy{padding:42px 30px}.cx-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:22px 18px}.cx-section{padding:28px 28px 8px} }
 .cx-choice { color:#f7f6fb; background:#202025; border:1px solid #3a363f; width:min(380px,calc(100vw - 32px)); border-radius:16px; padding:20px; }
 .cx-choice::backdrop { background:#000a; }

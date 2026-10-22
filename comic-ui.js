@@ -21,8 +21,8 @@
   dialog.setAttribute('aria-labelledby', 'cxImportTitle');
   dialog.innerHTML = `<h2 id="cxImportTitle">보관함에 가져오기</h2>
     <form id="cxImportForm"><label>작품 이름<input id="cxWorkName" maxlength="200" required autocomplete="off"></label>
-    <label>권·회차 이름<input id="cxVolumeName" maxlength="200" required autocomplete="off"></label>
-    <p id="cxImportSummary"></p><progress id="cxImportProgress" max="1" value="0" hidden></progress>
+    <label id="cxVolumeField">권·회차 이름<input id="cxVolumeName" maxlength="200" required autocomplete="off"></label>
+    <p id="cxImportSummary"></p><ul id="cxImportVolumes" aria-label="가져올 권 목록" hidden></ul><progress id="cxImportProgress" max="1" value="0" hidden></progress>
     <p id="cxImportStatus" role="status"></p><div class="cx-dialog-actions">
     <button id="cxImportCancel" type="button">취소</button><button id="cxImportStart" class="cx-primary" type="submit">가져오기</button></div></form>`;
   document.body.append(dialog);
@@ -32,7 +32,7 @@
   let route = 'home', books = [], activeBook = null, query = '', searchOpen = false, sort = 'added';
   let renderEpoch = 0, visible = false, coverURLs = [], folderPath = '/', folderEntries = [], folderBusy = false;
   let folderError = '', folderController = null, importController = null, importSource = null, importSession = null;
-  let importing = false, shownEntries = 100;
+  let importing = false, scanning = false, shownEntries = 100;
   const api = { actions: {}, show, hide, refresh: () => render(), showShelf: () => navigate('shelf') };
   window.HoyulComix = api;
   const element = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
@@ -42,6 +42,30 @@
   const imageFile = item => /\.(?:jpe?g|png)$/i.test(item.name || '') && !/^(?:\.|@)/.test(item.name || '');
   const baseName = path => path.split('/').filter(Boolean).at(-1) || 'NAS';
   const parentPath = path => path.slice(0, path.lastIndexOf('/')) || '/';
+  const visibleName = name => typeof name === 'string' && !/^(?:\.|@)/.test(name) && !['#recycle','#snapshot'].includes(name.toLowerCase());
+  function checkTransfer(controller, endpoint) {
+    if(controller.signal.aborted) throw new DOMException('가져오기를 중단했습니다.','AbortError');
+    if(endpoint && nas.getEndpoint() !== endpoint) throw Error('NAS 연결이 바뀌었습니다. 작품 폴더를 다시 열어 주세요.');
+  }
+  async function readFolder(path, controller, endpoint, onProgress) {
+    let offset=0,total=1; const found=new Map();
+    while(offset<total) {
+      checkTransfer(controller, endpoint);
+      const data=await nas.listComicFolder(path,{signal:controller.signal,offset,limit:100});
+      checkTransfer(controller, endpoint);
+      if(!Array.isArray(data.entries)||!Number.isSafeInteger(data.total)||data.total<0||data.total>100000||
+          !Number.isSafeInteger(data.nextOffset)||data.nextOffset<offset||data.nextOffset>data.total||
+          data.nextOffset>offset+100||(data.nextOffset<=offset&&offset<data.total)) throw Error('폴더 목록을 확인하지 못했습니다.');
+      for(const entry of data.entries) {
+        if(!visibleName(entry.name)) continue;
+        if(typeof entry.path!=='string'||parentPath(entry.path)!==path||baseName(entry.path)!==entry.name||
+            /[\\\u0000-\u001f\u007f]/.test(entry.path)||entry.name==='..'||entry.name==='.') throw Error('폴더 경로를 확인하지 못했습니다.');
+        if(entry.isDir||imageFile(entry)) found.set(entry.path,entry);
+      }
+      offset=data.nextOffset;total=data.total;onProgress?.(Math.min(offset,total),total);
+    }
+    return [...found.values()].sort((a,b)=>Number(b.isDir)-Number(a.isDir)||collator.compare(a.name,b.name));
+  }
   function report(error) { api.actions.notify?.(error?.name === 'QuotaExceededError' ? '기기 저장 공간이 부족합니다. 저장 공간을 확보한 뒤 다시 시도해 주세요.' : error?.message || '요청을 처리하지 못했습니다. 다시 시도해 주세요.'); }
   function clearCovers() { coverURLs.forEach(url => URL.revokeObjectURL(url)); coverURLs = []; }
   async function cover(book, epoch, cls = '') {
@@ -159,7 +183,8 @@
     let path = ''; for(const part of folderPath.split('/').filter(Boolean)) { path += '/'+part; crumbs.append(element('span','','›'),button('folder',part,'',path)); }
     view.append(crumbs);
     const images = folderEntries.filter(entry=>!entry.isDir&&imageFile(entry));
-    const count = element('div','cx-toolbar'); count.append(element('span','',folderBusy ? '폴더를 불러오는 중' : `${images.length}장`),button('refresh','새로고침')); view.append(count);
+    const folders = folderEntries.filter(entry=>entry.isDir&&visibleName(entry.name));
+    const count = element('div','cx-toolbar'); count.append(element('span','',folderBusy ? '폴더를 불러오는 중' : folders.length ? `폴더 ${folders.length}개 · 이미지 ${images.length}장` : `${images.length}장`),button('refresh','새로고침')); view.append(count);
     if (folderError) { const err = element('p','cx-error',folderError); err.setAttribute('role','alert'); view.append(err); }
     const shown = folderEntries.slice(0,shownEntries);
     for (const entry of shown) {
@@ -170,7 +195,14 @@
     }
     if (folderEntries.length>shownEntries) { const more = button('more','더 보기','cx-row'); view.append(more); }
     if (!folderBusy && !folderError && !folderEntries.length) view.append(empty('이미지가 없는 폴더입니다','다른 폴더를 열어보세요.','parent','상위 폴더'));
-    if (images.length && !folderBusy && !folderError) { const dock = element('div','cx-import-dock'); dock.append(button('import-folder',`${images.length}장 보관함에 가져오기`,'cx-primary')); view.append(dock); }
+    if (folderPath!=='/' && !folderBusy && !folderError && (images.length||folders.length)) {
+      const dock = element('div','cx-import-dock');
+      if(folders.length) {
+        dock.append(button('import-work','이 작품 전체 가져오기','cx-primary'),element('p','cx-import-dock-note','권별 폴더를 같은 작품으로 묶어 가져옵니다.'));
+        if(images.length) dock.append(button('import-folder',`이 폴더의 이미지 ${images.length}장만 가져오기`,'cx-import-current'));
+      } else dock.append(button('import-folder',`${images.length}장 보관함에 가져오기`,'cx-primary'));
+      view.append(dock);
+    }
     return view;
   }
   async function render() {
@@ -184,9 +216,9 @@
     } catch(error) { if(epoch===renderEpoch) { root.replaceChildren(header('home'),empty('만화를 불러오지 못했습니다','앱을 다시 열어 주세요.')); report(error); } }
   }
   async function show() { visible=true; root.hidden=false; document.body.classList.add('comix-visible'); document.querySelector('meta[name="theme-color"]').content='#111214'; try { await store.ready(); await render(); } catch(error) { report(error); } }
-  function hide() { if(importing) return false; visible=false; ++renderEpoch; folderController?.abort(); reader.hide(); nas?.hide(); root.hidden=true; clearCovers(); document.body.classList.remove('comix-visible'); return true; }
+  function hide() { if(importing||scanning) return false; visible=false; ++renderEpoch; folderController?.abort(); reader.hide(); nas?.hide(); root.hidden=true; clearCovers(); document.body.classList.remove('comix-visible'); return true; }
   async function navigate(next, id) {
-    if(importing) return;
+    if(importing||scanning) return;
     if(next==='nas') { await showNAS(); return; }
     folderController?.abort(); nas?.hide(); reader.hide(); root.hidden=false;
     route=next; if(id) activeBook=id; await render(); window.scrollTo(0,0);
@@ -203,56 +235,110 @@
     folderController?.abort(); const controller = new AbortController(); folderController=controller;
     folderPath=path; folderEntries=[]; shownEntries=100; folderBusy=true; folderError=''; await render();
     try {
-      let offset=0,total=1; const found=new Map();
-      while(offset<total) {
-        const data=await nas.listComicFolder(path,{signal:controller.signal,offset,limit:100});
-        if(controller.signal.aborted||folderController!==controller) return;
-        if(!Array.isArray(data.entries)||!Number.isSafeInteger(data.total)||data.total<0||data.total>100000||!Number.isSafeInteger(data.nextOffset)||data.nextOffset<=offset&&offset<data.total) throw Error('폴더 목록을 확인하지 못했습니다.');
-        for(const entry of data.entries) if(entry.isDir||imageFile(entry)) found.set(entry.path,entry);
-        offset=data.nextOffset;total=data.total;
-      }
-      folderEntries=[...found.values()].sort((a,b)=>Number(b.isDir)-Number(a.isDir)||collator.compare(a.name,b.name));
+      const entries=await readFolder(path,controller,nas.getEndpoint());
+      if(controller.signal.aborted||folderController!==controller) return;
+      folderEntries=entries;
     } catch(error) { if(controller.signal.aborted) return; folderError=error.message||'NAS 폴더를 불러오지 못했습니다.'; }
     finally { if(folderController===controller){folderBusy=false;folderController=null;if(visible&&route==='nas') await render();} }
   }
   function openImport(source) {
-    if(importing) return;
+    if(importing||scanning) return;
     importSource=source; const name=source.folder ? baseName(source.folder) : '새 만화';
+    const volumes=source.volumes||[{folder:source.folder,volumeTitle:source.folder?name:'1권',entries:source.entries}];
+    source.volumes=volumes; source.completed=new Map();
+    const entries=volumes.flatMap(volume=>volume.entries);
     const volumeLike=/^(?:\d+|제?\s*\d+\s*[권화회]|vol[. _-]*\d+)/i.test(name);
-    $('cxWorkName').value=activeBook&&route==='detail' ? books.find(book=>book.id===activeBook)?.title||name : source.folder&&volumeLike ? baseName(parentPath(source.folder)) : name;
+    $('cxWorkName').value=source.existingTitle||source.workImport&&name||(activeBook&&route==='detail' ? books.find(book=>book.id===activeBook)?.title||name : source.folder&&volumeLike ? baseName(parentPath(source.folder)) : name);
+    $('cxWorkName').readOnly=!!source.existingTitle;
+    $('cxVolumeField').hidden=!!source.workImport;
+    $('cxVolumeName').required=!source.workImport;
     $('cxVolumeName').value=source.folder?name:'1권';
-    $('cxImportSummary').textContent=`${source.entries.length}장 · ${formatBytes(source.entries.reduce((sum,item)=>sum+(item.size||0),0))}`;
+    $('cxImportSummary').textContent=`${source.workImport?volumes.length+'권 · ':''}${entries.length}장 · ${formatBytes(entries.reduce((sum,item)=>sum+(item.size||0),0))}${source.existingTitle?' · 기존 작품에 추가합니다.':''}`;
+    $('cxImportVolumes').replaceChildren(...volumes.map(volume=>element('li','',`${volume.volumeTitle} · ${volume.entries.length}장`)));
+    $('cxImportVolumes').hidden=!source.workImport;
     $('cxImportStatus').textContent=''; $('cxImportProgress').hidden=true;
-    $('cxWorkName').disabled=false; $('cxVolumeName').disabled=false; $('cxImportStart').disabled=false; $('cxImportCancel').textContent='취소';
-    dialog.showModal(); $('cxWorkName').focus();
+    $('cxWorkName').disabled=false; $('cxVolumeName').disabled=false; $('cxImportStart').disabled=false; $('cxImportStart').textContent='가져오기'; $('cxImportCancel').textContent='취소';
+    if(!dialog.open) dialog.showModal(); $('cxWorkName').focus();
+  }
+  async function scanWork() {
+    if(importing||scanning||folderBusy||folderPath==='/') return;
+    const folder=folderPath,endpoint=nas.getEndpoint(),controller=new AbortController();
+    scanning=true;importController=controller;importSource=null;
+    $('cxWorkName').value=baseName(folder);$('cxWorkName').disabled=true;$('cxVolumeName').disabled=true;
+    $('cxVolumeField').hidden=true;$('cxVolumeName').required=false;
+    $('cxImportVolumes').hidden=true;$('cxImportSummary').textContent='권별 폴더를 확인하고 있습니다.';
+    $('cxImportStatus').textContent='';$('cxImportStart').disabled=true;$('cxImportCancel').textContent='중단';
+    $('cxImportProgress').hidden=false;$('cxImportProgress').removeAttribute('value');
+    dialog.showModal();$('cxImportCancel').focus();
+    try {
+      const pending=[folder],visited=new Set(),volumes=[];
+      while(pending.length) {
+        checkTransfer(controller,endpoint);
+        const path=pending.pop();if(visited.has(path)) continue;visited.add(path);
+        $('cxImportStatus').textContent=`폴더 ${visited.size}개 확인 중 · ${path===folder?baseName(folder):path.slice(folder.length+1)}`;
+        const entries=await readFolder(path,controller,endpoint,(count,total)=>{ $('cxImportSummary').textContent=`${volumes.length}권 발견 · 현재 폴더 ${count} / ${total}`; });
+        const images=entries.filter(entry=>!entry.isDir&&imageFile(entry));
+        if(images.length) volumes.push({folder:path,volumeTitle:path===folder?baseName(folder):path.slice(folder.length+1),entries:images});
+        const children=entries.filter(entry=>entry.isDir&&visibleName(entry.name));
+        for(let i=children.length-1;i>=0;i--) pending.push(children[i].path);
+      }
+      checkTransfer(controller,endpoint);
+      if(!volumes.length) throw Error('이 작품 폴더 안에 가져올 JPG·PNG 이미지가 없습니다.');
+      volumes.sort((a,b)=>collator.compare(a.volumeTitle,b.volumeTitle));
+      const sources=new Set(volumes.map(volume=>volume.folder)),existingTitles=new Set();
+      const allBooks=await store.listBooks();
+      for(const book of allBooks) {
+        checkTransfer(controller,endpoint);
+        const saved=await store.listVolumes(book.id);
+        if(saved.some(volume=>volume.source?.endpoint===endpoint&&sources.has(volume.source.folder))) existingTitles.add(book.title);
+      }
+      if(existingTitles.size>1) throw Error('이 폴더의 권들이 서로 다른 작품 이름으로 저장되어 있습니다. 기존 보관함의 작품 이름을 먼저 확인해 주세요.');
+      checkTransfer(controller,endpoint);scanning=false;importController=null;
+      openImport({folder,endpoint,volumes,workImport:true,existingTitle:[...existingTitles][0]});
+    } catch(error) {
+      $('cxImportProgress').hidden=true;
+      $('cxImportStatus').textContent=controller.signal.aborted?'폴더 확인을 중단했습니다. 저장한 작품은 그대로입니다.':error.message||'권별 폴더를 확인하지 못했습니다. 다시 시도해 주세요.';
+      $('cxImportSummary').textContent='가져오기를 시작하지 않았습니다.';$('cxImportCancel').textContent='닫기';
+    } finally { scanning=false;importController=null; }
   }
   async function beginTransfer(event) {
-    event.preventDefault(); if(importing||!importSource) return;
-    const title=$('cxWorkName').value.trim(), volumeTitle=$('cxVolumeName').value.trim(); if(!title||!volumeTitle) return;
+    event.preventDefault(); if(importing||scanning||!importSource) return;
+    const title=$('cxWorkName').value.trim(), volumeTitle=$('cxVolumeName').value.trim(); if(!title||!importSource.workImport&&!volumeTitle) return;
     const selected=importSource, controller=new AbortController(); importController=controller; importing=true;
     $('cxWorkName').disabled=true;$('cxVolumeName').disabled=true;$('cxImportStart').disabled=true;$('cxImportCancel').textContent='중단';
-    const entries=[...selected.entries].sort((a,b)=>collator.compare(a.name,b.name));
+    const volumes=selected.volumes,entries=volumes.flatMap(volume=>volume.entries);
     const progress=$('cxImportProgress'); progress.max=entries.length;progress.value=0;progress.hidden=false;
+    let savedPages=0,lastResult=null;
     try {
-      const estimate=await navigator.storage?.estimate?.(); const bytes=entries.reduce((sum,item)=>sum+(item.size||0),0);
+      const estimate=await navigator.storage?.estimate?.();
+      const bytes=volumes.filter(volume=>!selected.completed.has(volume.folder||'local')).reduce((sum,volume)=>sum+volume.entries.reduce((size,item)=>size+(item.size||0),0),0);
       if(estimate?.quota && estimate.quota-estimate.usage<bytes*1.1) throw new DOMException('기기 저장 공간이 부족합니다.','QuotaExceededError');
-      if(controller.signal.aborted) throw new DOMException('가져오기를 중단했습니다.','AbortError');
-      importSession=await store.beginImport({title,volumeTitle,source:{endpoint:selected.endpoint||'local',folder:selected.folder||'local/'+title+'/'+volumeTitle},manifest:entries.map(item=>({name:item.name,size:item.size,path:item.path||item.name}))});
-      for(let i=0;i<entries.length;i++) {
-        if(controller.signal.aborted) throw new DOMException('가져오기를 중단했습니다.','AbortError');
-        const entry=entries[i]; $('cxImportStatus').textContent=`${i+1} / ${entries.length}장 · ${entry.name}`;
-        const blob=entry.file||await nas.downloadComicPage(entry.path,{signal:controller.signal});
-        if(controller.signal.aborted) throw new DOMException('가져오기를 중단했습니다.','AbortError');
-        await store.putImportPage(importSession,{name:entry.name,blob,order:i,path:entry.path||entry.name});
-        progress.value=i+1;
+      for(let v=0;v<volumes.length;v++) {
+        const volume=volumes[v],key=volume.folder||'local';
+        checkTransfer(controller,selected.endpoint);
+        if(selected.completed.has(key)) { savedPages+=volume.entries.length;progress.value=savedPages;lastResult=selected.completed.get(key);continue; }
+        const name=selected.workImport?volume.volumeTitle:volumeTitle;
+        const images=[...volume.entries].sort((a,b)=>collator.compare(a.name,b.name));
+        importSession=await store.beginImport({title,volumeTitle:name,source:{endpoint:selected.endpoint||'local',folder:volume.folder||'local/'+title+'/'+name},manifest:images.map(item=>({name:item.name,size:item.size,path:item.path||item.name}))});
+        for(let i=0;i<images.length;i++) {
+          checkTransfer(controller,selected.endpoint);
+          const entry=images[i]; $('cxImportStatus').textContent=selected.workImport?`${v+1} / ${volumes.length}권 · ${name} · ${i+1} / ${images.length}장`:`${i+1} / ${images.length}장 · ${entry.name}`;
+          const blob=entry.file||await nas.downloadComicPage(entry.path,{signal:controller.signal});
+          checkTransfer(controller,selected.endpoint);
+          await store.putImportPage(importSession,{name:entry.name,blob,order:i,path:entry.path||entry.name});
+          progress.value=++savedPages;
+        }
+        checkTransfer(controller,selected.endpoint);
+        lastResult=await store.finishImport(importSession);importSession=null;
+        selected.completed.set(key,lastResult);
       }
-      if(controller.signal.aborted) throw new DOMException('가져오기를 중단했습니다.','AbortError');
-      const result=await store.finishImport(importSession);importSession=null;importing=false;importController=null;dialog.close();
-      activeBook=result.bookId;route='detail';root.hidden=false;await render();window.scrollTo(0,0);api.actions.notify?.(`${entries.length}장을 보관함에 저장했습니다.`);
+      importing=false;importController=null;dialog.close();
+      activeBook=lastResult.bookId;route='detail';root.hidden=false;await render();window.scrollTo(0,0);api.actions.notify?.(`${selected.workImport?volumes.length+'권 · ':''}${entries.length}장을 보관함에 저장했습니다.`);
     } catch(error) {
       if(importSession) { try { await store.cancelImport(importSession); } catch(_){} importSession=null; }
-      $('cxImportStatus').textContent=controller.signal.aborted?'가져오기를 중단했습니다. 기존에 저장한 만화는 유지됩니다.':error.name==='QuotaExceededError'?'기기 저장 공간이 부족합니다. 저장 공간을 확보한 뒤 다시 시도해 주세요.':error.message||'가져오지 못했습니다. 다시 시도해 주세요.';
-      importing=false;importController=null;$('cxImportStart').disabled=false;$('cxWorkName').disabled=false;$('cxVolumeName').disabled=false;$('cxImportCancel').textContent='닫기';
+      const message=controller.signal.aborted?'가져오기를 중단했습니다. 기존에 저장한 만화는 유지됩니다.':error.name==='QuotaExceededError'?'기기 저장 공간이 부족합니다. 저장 공간을 확보한 뒤 다시 시도해 주세요.':error.message||'가져오지 못했습니다. 다시 시도해 주세요.';
+      $('cxImportStatus').textContent=message+(selected.workImport&&selected.completed.size?` ${volumes.length}권 중 ${selected.completed.size}권을 저장했습니다. 남은 권부터 이어서 가져올 수 있습니다.`:'');
+      importing=false;importController=null;$('cxImportStart').disabled=false;$('cxImportStart').textContent=selected.completed.size?'남은 권 가져오기':'다시 가져오기';$('cxWorkName').disabled=false;$('cxWorkName').readOnly=!!selected.existingTitle||selected.completed.size>0;$('cxVolumeName').disabled=false;$('cxImportCancel').textContent='닫기';
     }
   }
   async function openVolume(id) {
@@ -262,7 +348,7 @@
     catch(error){reader.hide();root.hidden=false;report(error);}
   }
   async function run(action,value) {
-    if(importing) return;
+    if(importing||scanning) return;
     if(action==='novel'){api.actions.openNovel?.();return;}
     if(['home','shelf','nas'].includes(action)){query='';searchOpen=false;await navigate(action);return;}
     if(action==='book'){await navigate('detail',value);return;}
@@ -276,6 +362,7 @@
     if(action==='refresh'){await loadFolder(folderPath);return;}
     if(action==='more'){shownEntries+=100;await render();return;}
     if(action==='import-folder'){openImport({folder:folderPath,endpoint:nas.getEndpoint(),entries:folderEntries.filter(entry=>!entry.isDir&&imageFile(entry))});return;}
+    if(action==='import-work'){await scanWork();return;}
     if(action==='volume'){await openVolume(value);return;}
     if(action==='continue'){
       const book=books.find(book=>book.id===value);if(!book)return;activeBook=value;
@@ -295,7 +382,7 @@
   root.addEventListener('change',event=>{if(event.target.id==='cxSort'){sort=event.target.value;void render();}});
   files.addEventListener('change',()=>{const entries=[...files.files].filter(imageFile).map(file=>({name:file.name,size:file.size,file}));if(entries.length)openImport({entries});else api.actions.notify?.('JPG·PNG 이미지를 선택해 주세요.');});
   $('cxImportForm').addEventListener('submit',event=>{void beginTransfer(event);});
-  $('cxImportCancel').addEventListener('click',()=>{if(importing)importController?.abort();else dialog.close();});
-  dialog.addEventListener('cancel',event=>{if(importing){event.preventDefault();importController?.abort();}});
-  window.addEventListener('beforeunload',event=>{if(importing){event.preventDefault();event.returnValue='';}});
+  $('cxImportCancel').addEventListener('click',()=>{if(importing||scanning)importController?.abort();else dialog.close();});
+  dialog.addEventListener('cancel',event=>{if(importing||scanning){event.preventDefault();importController?.abort();}});
+  window.addEventListener('beforeunload',event=>{if(importing||scanning){event.preventDefault();event.returnValue='';}});
 })();
