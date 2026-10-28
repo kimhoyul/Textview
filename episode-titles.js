@@ -45,11 +45,11 @@
     if (selectedContext !== context) throw new Error('NAS 연결 주소가 바뀌었습니다. 다시 시도해 주세요.');
   }
 
-  async function supportsEpisodes() {
+  async function supportsEpisodes(provider = 'series') {
     const url = getEndpoint();
     const selectedContext = context;
     if (health && health.time > Date.now() - 60000) {
-      if (!health.available) throw new Error(UPDATE_MESSAGE);
+      if (!health.available || (provider === 'novelpia' && !health.providers.includes(provider))) throw new Error(UPDATE_MESSAGE);
       return;
     }
     const response = await fetchTimed(url + '?health=1');
@@ -57,8 +57,8 @@
     try { data = await response.json(); } catch { throw new Error(UPDATE_MESSAGE); }
     checkContext(selectedContext);
     const available = response.ok && data?.ok === true && data.episodeTitles === true;
-    health = { time: Date.now(), available };
-    if (!available) throw new Error(UPDATE_MESSAGE);
+    health = { time: Date.now(), available, providers: Array.isArray(data.episodeProviders) ? data.episodeProviders : [] };
+    if (!available || (provider === 'novelpia' && !health.providers.includes(provider))) throw new Error(UPDATE_MESSAGE);
   }
 
   async function gateway(action, payload = {}, retry = true, selectedContext = null) {
@@ -104,29 +104,34 @@
     const lookupEndpoint = getEndpoint();
     const rows = await window.TextviewCoverSearch.lookup(title.trim());
     if (lookupEndpoint !== getEndpoint()) throw new Error('NAS 연결 주소가 바뀌었습니다. 다시 시도해 주세요.');
-    if (!Array.isArray(rows) || rows.length > 12) throw new Error(INVALID_MESSAGE);
-    const matches = new Map();
-    for (const row of rows) {
-      const id = /^series:([1-9][0-9]{0,11})$/.exec(typeof row?.id === 'string' ? row.id : '');
-      if (!id || !validText(row.title) || !validText(row.author ?? '', true)
-          || normalizedTitle(row.title) !== normalizedTitle(title)
-          || (author && normalizedText(row.author || '') !== normalizedText(author))) continue;
-      const selected = { productId: id[1], title: row.title.trim(), author: (row.author || '').trim(), sourceName: '네이버 시리즈' };
-      const previous = matches.get(id[1]);
-      if (previous && normalizedText(previous.author) !== normalizedText(selected.author)) throw new Error('작가 정보가 일치하지 않아 회차 제목을 연결하지 않았습니다.');
-      matches.set(id[1], selected);
+    if (!Array.isArray(rows) || rows.length > 24) throw new Error(INVALID_MESSAGE);
+    const sourceName = typeof book?.sourceName === 'string' ? normalizedText(book.sourceName) : '';
+    const preferred = ['노벨피아', 'novelpia'].includes(sourceName) ? 'novelpia'
+      : ['네이버시리즈', 'naverseries', 'series'].includes(sourceName) ? 'series' : null;
+    for (const provider of preferred ? [preferred] : ['series', 'novelpia']) {
+      const matches = new Map();
+      for (const row of rows) {
+        const id = /^(series|novelpia):([1-9][0-9]{0,11})$/.exec(typeof row?.id === 'string' ? row.id : '');
+        if (!id || id[1] !== provider || !validText(row.title) || !validText(row.author ?? '', true)
+            || normalizedTitle(row.title) !== normalizedTitle(title)
+            || (author && normalizedText(row.author || '') !== normalizedText(author))) continue;
+        const selected = { provider, productId: id[2], title: row.title.trim(), author: (row.author || '').trim(), sourceName: provider === 'series' ? '네이버 시리즈' : '노벨피아' };
+        const key = provider + ':' + id[2], previous = matches.get(key);
+        if (previous && normalizedText(previous.author) !== normalizedText(selected.author)) throw new Error('작가 정보가 일치하지 않아 회차 제목을 연결하지 않았습니다.');
+        matches.set(key, selected);
+      }
+      if (matches.size > 1) throw new Error('같은 제목의 작품이 여러 개라 회차 제목을 자동으로 연결하지 않았습니다.');
+      if (matches.size) return matches.values().next().value;
     }
-    if (!matches.size) throw new Error('이 작품과 일치하는 네이버 시리즈 회차 목록을 찾지 못했습니다.');
-    if (matches.size > 1) throw new Error('같은 제목의 작품이 여러 개라 회차 제목을 자동으로 연결하지 않았습니다.');
-    return matches.values().next().value;
+    throw new Error('이 작품과 일치하는 ' + (preferred === 'novelpia' ? '노벨피아' : preferred === 'series' ? '네이버 시리즈' : '공개') + ' 회차 목록을 찾지 못했습니다.');
   }
 
-  async function getPage(productId, page) {
+  async function getPage(productId, page, provider = 'series') {
     if (typeof productId !== 'string' || !/^[1-9][0-9]{0,11}$/.test(productId)
-        || !Number.isSafeInteger(page) || page < 1 || page > 334) throw new Error('회차 제목 요청을 확인해 주세요.');
-    await supportsEpisodes();
-    const data = await gateway('episode_titles', { productId, page });
-    if (data.productId !== productId || data.page !== page || !Number.isSafeInteger(data.total) || data.total < 1 || data.total > 10000
+        || !Number.isSafeInteger(page) || page < 1 || page > 334 || !['series', 'novelpia'].includes(provider)) throw new Error('회차 제목 요청을 확인해 주세요.');
+    await supportsEpisodes(provider);
+    const data = await gateway('episode_titles', { productId, page, ...(provider === 'series' ? {} : { provider }) });
+    if ((data.provider === undefined ? 'series' : data.provider) !== provider || data.productId !== productId || data.page !== page || !Number.isSafeInteger(data.total) || data.total < 1 || data.total > 10000
         || !validText(data.title) || !validText(data.author, true) || typeof data.hasMore !== 'boolean'
         || data.hasMore !== (page < 334 && page * 30 < data.total)
         || !Array.isArray(data.episodes) || data.episodes.length > 30) throw new Error(INVALID_MESSAGE);
@@ -138,7 +143,7 @@
       lastNumber = item.number;
       return { number: item.number, title: item.title.trim() };
     });
-    return { productId, page, total: data.total, title: data.title.trim(), author: data.author.trim(), hasMore: data.hasMore, episodes };
+    return { provider, productId, page, total: data.total, title: data.title.trim(), author: data.author.trim(), hasMore: data.hasMore, episodes };
   }
 
   window.TextviewEpisodeTitles = { resolveBook, getPage };

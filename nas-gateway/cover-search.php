@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/novelpia.php';
+
 function nas_cover_available(): bool
 {
     return extension_loaded('curl') && class_exists(DOMDocument::class);
@@ -92,29 +94,46 @@ function nas_cover_parse(string $html): array
 }
 
 /** The optional fetcher is reachable only from server-side tests. */
-function nas_cover_search(mixed $query, array &$session, ?callable $fetcher = null): array
+function nas_cover_search(mixed $query, array &$session, ?callable $fetcher = null, ?callable $novelpiaFetcher = null): array
 {
     if (!is_string($query) || preg_match('//u', $query) !== 1) { throw nas_cover_error('COVER_INVALID_QUERY'); }
     $query = trim($query);
     if (preg_match('/^.{1,100}$/usD', $query) !== 1 || preg_match('/\p{Cc}/u', $query) === 1) { throw nas_cover_error('COVER_INVALID_QUERY'); }
     $now = time();
+    // Legacy test fetchers describe Series only. A separate fixture opts into
+    // Novelpia tests without accidentally reaching the public network.
+    $includeNovelpia = $fetcher === null || $novelpiaFetcher !== null;
+    $providers = $includeNovelpia ? 'series+novelpia:v1' : 'series:v1';
     $cached = $session['cover_cache'] ?? null;
-    if (is_array($cached) && ($cached['query'] ?? '') === $query && (int)($cached['time'] ?? 0) > $now - 60) { return $cached['results']; }
+    if (is_array($cached) && ($cached['query'] ?? '') === $query && ($cached['providers'] ?? '') === $providers
+        && (int)($cached['time'] ?? 0) > $now - 60) { return $cached['results']; }
     $url = 'https://series.naver.com/search/search.series?t=all&fs=novel&q=' . rawurlencode($query);
-    $response = $fetcher ? $fetcher($url, 2 * 1024 * 1024, true) : nas_cover_fetch($url, 2 * 1024 * 1024, true);
-    if (($response['type'] ?? '') !== 'text/html') { throw nas_cover_error(); }
-    $rows = nas_cover_parse($response['body'] ?? '');
+    $rows = [];
+    $failed = false;
+    try {
+        $response = $fetcher ? $fetcher($url, 2 * 1024 * 1024, true) : nas_cover_fetch($url, 2 * 1024 * 1024, true);
+        if (($response['type'] ?? '') !== 'text/html') { throw nas_cover_error(); }
+        $rows = nas_cover_parse($response['body'] ?? '');
+    } catch (GatewayError $error) {
+        if (!$includeNovelpia) { throw $error; }
+        $failed = true;
+    }
+    if ($includeNovelpia) {
+        try { $rows = array_merge($rows, nas_novelpia_search($query, $novelpiaFetcher)); }
+        catch (GatewayError) { $failed = true; }
+    }
+    if ($rows === [] && $failed) { throw nas_cover_error(); }
     $tokens = [];
     $results = [];
     foreach ($rows as $row) {
         $token = bin2hex(random_bytes(24));
-        $tokens[$token] = ['url' => $row['url'], 'expires' => $now + 300];
+        $tokens[$token] = ['url' => $row['url'], 'provider' => str_starts_with($row['id'], 'novelpia:') ? 'novelpia' : 'series', 'expires' => $now + 300];
         unset($row['url']);
         $row['token'] = $token;
         $results[] = $row;
     }
     $session['cover_candidates'] = $tokens;
-    $session['cover_cache'] = ['query' => $query, 'time' => $now, 'results' => $results];
+    $session['cover_cache'] = ['query' => $query, 'providers' => $providers, 'time' => $now, 'results' => $results];
     return $results;
 }
 
@@ -135,8 +154,14 @@ function nas_cover_download(mixed $token, array $session, ?callable $fetcher = n
     if (!is_string($token) || preg_match('/^[a-f0-9]{48}$/D', $token) !== 1) { throw nas_cover_error('COVER_TOKEN_EXPIRED'); }
     $candidate = $session['cover_candidates'][$token] ?? null;
     if (!is_array($candidate) || (int)($candidate['expires'] ?? 0) <= time() || !is_string($candidate['url'] ?? null)) { throw nas_cover_error('COVER_TOKEN_EXPIRED'); }
-    $url = nas_cover_url($candidate['url']);
-    $response = $fetcher ? $fetcher($url, 5 * 1024 * 1024, false) : nas_cover_fetch($url, 5 * 1024 * 1024, false);
+    $provider = $candidate['provider'] ?? 'series';
+    if (!in_array($provider, ['series', 'novelpia'], true)) { throw nas_cover_error('COVER_TOKEN_EXPIRED'); }
+    if ($provider === 'novelpia') {
+        $response = nas_novelpia_cover_download(nas_novelpia_image_url($candidate['url']), $fetcher);
+    } else {
+        $url = nas_cover_url($candidate['url']);
+        $response = $fetcher ? $fetcher($url, 5 * 1024 * 1024, false) : nas_cover_fetch($url, 5 * 1024 * 1024, false);
+    }
     $response['type'] = nas_cover_raster($response['body'] ?? '', $response['type'] ?? '');
     return $response;
 }

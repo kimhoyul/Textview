@@ -16,6 +16,9 @@ https://chhc007.synology.me:9444/textview-nas/api.php
 https://chhc007.synology.me:9444/textview-nas/api.php?health=1
 이 주소를 브라우저에서 열면 ready, php, curl, session, gatewayVersion을 확인할 수 있습니다.
 표지 검색은 coverSearch: true, 회차 제목 조회는 episodeTitles: true, 회차 파일명 반영은 episodeRename: true로 확인합니다.
+coverProviders와 episodeProviders에 series, novelpia가 있으면 두 출처를 지원합니다.
+노벨피아 지원에는 api.php, cover-search.php, episode-rename.php와 새 novelpia.php가 필요합니다. 기존 config.php와 episode-titles.php는 유지합니다.
+노벨피아의 공개 표지와 EP 번호가 있는 공개 목차만 조회합니다. 공지와 번호 없는 BONUS 항목은 자동 회차 연결에서 제외합니다.
 gatewayVersion: nas4는 업로드한 서버 코드 버전입니다. 실제 NAS 승인 로그인 성공을 뜻하지 않습니다.
 이 확인 요청은 로그인, NAS 조회, 세션 생성, 임시 파일 생성을 하지 않습니다.
 

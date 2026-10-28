@@ -227,8 +227,10 @@
     }
     const info = episodeTitleMaps.get(value);
     const model = window.TextviewEpisodeTitleModel;
-    const author = coverCredits(storedCover(book)).author;
-    return info && model.titleKey(info.title) === model.titleKey(book) && (!author || model.authorKey(author) === model.authorKey(info.author)) ? info : null;
+    const credits = coverCredits(storedCover(book));
+    const provider = model.providerForSource?.(credits.sourceName) || null;
+    return info && model.titleKey(info.title) === model.titleKey(book) && (!credits.author || model.authorKey(credits.author) === model.authorKey(info.author))
+      && (!provider || provider === info.provider) ? info : null;
   }
 
   function episodeNumber(chapter) {
@@ -267,28 +269,31 @@
     if (!force && fresh && numbers.every(number => cached.titles.has(number) || cached.pages.includes(Math.floor((number - 1) / 30) + 1))) { queueNASNameSync(book); return; }
     const job = {};
     const generation = episodeTitleGeneration.get(book) || 0;
+    const sourceIdentity = JSON.stringify(coverCredits(storedCover(book)));
     episodeTitleJobs.set(book, job);
-    const valid = () => !!db && !busy && inBook(book).length && episodeTitleJobs.get(book) === job && (episodeTitleGeneration.get(book) || 0) === generation;
+    const valid = () => !!db && !busy && inBook(book).length && episodeTitleJobs.get(book) === job && (episodeTitleGeneration.get(book) || 0) === generation
+      && JSON.stringify(coverCredits(storedCover(book))) === sourceIdentity;
     const status = patch => { if (valid()) { episodeTitleStatus.set(book, patch); renderBookDetail(); } };
     status({ loading: true, message: '회차 제목을 불러오는 중…' });
     let added = 0;
     try {
       const target = cached || await window.TextviewEpisodeTitles.resolveBook(model);
       if (!valid()) return;
+      const provider = target.provider || 'series';
       const wanted = force || !fresh ? numbers : numbers.filter(number => !cached.titles.has(number) && !cached.pages.includes(Math.floor((number - 1) / 30) + 1));
       const pages = [...new Set(wanted.map(number => Math.floor((number - 1) / 30) + 1))].sort((a, b) => a - b);
       const titles = new Map(cached?.titles || []);
       const checkedPages = new Set(fresh && !force ? cached?.pages || [] : []);
       let completed = 0;
       for (const page of pages) {
-        const result = await window.TextviewEpisodeTitles.getPage(target.productId, page);
+        const result = await window.TextviewEpisodeTitles.getPage(target.productId, page, provider);
         if (!valid()) return;
-        if (window.TextviewEpisodeTitleModel.titleKey(result.title) !== window.TextviewEpisodeTitleModel.titleKey(book) ||
+        if ((result.provider === undefined ? 'series' : result.provider) !== provider || window.TextviewEpisodeTitleModel.titleKey(result.title) !== window.TextviewEpisodeTitleModel.titleKey(book) ||
             (model.author && window.TextviewEpisodeTitleModel.authorKey(model.author) !== window.TextviewEpisodeTitleModel.authorKey(result.author))) throw new Error('작품 정보가 일치하지 않아 회차 제목을 적용하지 않았습니다.');
         for (const number of titles.keys()) if (number > (page - 1) * 30 && number <= page * 30) titles.delete(number);
         for (const item of result.episodes) titles.set(item.number, item.title);
         checkedPages.add(page);
-        const value = window.TextviewEpisodeTitleModel.normalize({ productId: target.productId, title: result.title,
+        const value = window.TextviewEpisodeTitleModel.normalize({ provider, productId: target.productId, title: result.title,
           author: result.author, episodes: [...titles].map(([number, title]) => ({ number, title })), pages: [...checkedPages], checkedAt: completed + 1 === pages.length ? Date.now() : 0 });
         if (!value) throw new Error('회차 제목 정보를 확인하지 못했습니다.');
         const record = { key: 'episode-titles:' + book, value, updatedAt: Date.now() };
@@ -528,7 +533,7 @@
   }
 
   function nasNamesKey(book, info) {
-    return `${memoryState.get('episode-titles:' + book)?.updatedAt || 0}:${info.productId}:${info.pages.join(',')}`;
+    return `${memoryState.get('episode-titles:' + book)?.updatedAt || 0}:${info.provider || 'series'}:${info.productId}:${info.pages.join(',')}`;
   }
 
   function queueNASNameSync(book) {
@@ -562,7 +567,7 @@
         const status = text => { if (valid()) { episodeTitleStatus.set(book, { ...episodeTitleStatus.get(book), nasMessage: text }); renderBookDetail(); } };
         status('NAS 파일 이름에 회차 제목을 반영하는 중…');
         try {
-          const result = await nas.syncEpisodeNames({ folder: origin.folder, productId: info.productId, title: info.title, author: info.author, pages });
+          const result = await nas.syncEpisodeNames({ folder: origin.folder, provider: info.provider || 'series', productId: info.productId, title: info.title, author: info.author, pages });
           if (!valid()) continue;
           if (!result) { status('NAS 로그인 후 파일 이름에 반영합니다.'); break; }
           if (result.unsupported || result.error || result.cancelled) throw new Error(result.unsupported ? 'NAS 연결 파일을 업데이트한 뒤 다시 연결해 주세요.' : result.error === 'SESSION_EXPIRED' ? 'NAS 로그인 후 파일 이름에 반영합니다.' : 'NAS 파일 이름을 반영하지 못했습니다. 다시 연결하면 재시도합니다.');
@@ -827,6 +832,7 @@
     if (!coverActive || !coverDraft?.changed || coverProcessing || busy || !db) return;
     const book = coverBookName;
     const key = 'cover:' + book;
+    const previousCredits = JSON.stringify(coverCredits(storedCover(book)));
     coverEditGeneration.set(book, (coverEditGeneration.get(book) || 0) + 1);
     coverProcessing = true;
     renderCoverPicker();
@@ -840,6 +846,14 @@
       } else {
         await dbRequest('state', 'delete', key);
         memoryState.delete(key);
+      }
+      if (JSON.stringify(coverCredits(storedCover(book))) !== previousCredits) {
+        // A pending request for the previous source must not update this book.
+        episodeTitleGeneration.set(book, (episodeTitleGeneration.get(book) || 0) + 1);
+        episodeTitleJobs.delete(book);
+        episodeTitleRetryAfter.delete(book);
+        episodeTitleStatus.delete(book);
+        pendingNASNames.delete(book);
       }
       coverProcessing = false;
       renderHome();

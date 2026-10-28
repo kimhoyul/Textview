@@ -386,7 +386,8 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             nas_json(['ok' => true, 'ready' => $phpReady && $curlReady && $sessionReady,
                 'php' => PHP_VERSION, 'curl' => $curlReady, 'session' => $sessionReady,
                 'gatewayVersion' => (string)($config['gateway_version'] ?? 'nas6'),
-                'coverSearch' => nas_cover_available(), 'episodeTitles' => nas_episode_available(), 'episodeRename' => nas_episode_available(), 'sharedCover' => true, 'comicFiles' => true]);
+                'coverSearch' => nas_cover_available(), 'episodeTitles' => nas_episode_available(), 'episodeRename' => nas_episode_available(), 'sharedCover' => true, 'comicFiles' => true,
+                'coverProviders' => ['series', 'novelpia'], 'episodeProviders' => ['series', 'novelpia']]);
         }
         if (nas_cors($config)) { return; }
         if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
@@ -412,8 +413,8 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             'comic_download' => ['action', 'path'],
             'cover_search' => ['action', 'query'],
             'cover_download' => ['action', 'token'],
-            'episode_titles' => ['action', 'productId', 'page'],
-            'sync_episode_names' => ['action', 'folder', 'paths', 'productId', 'page', 'expectedTitle', 'expectedAuthor'],
+            'episode_titles' => ['action', 'productId', 'page', 'provider'],
+            'sync_episode_names' => ['action', 'folder', 'paths', 'productId', 'page', 'expectedTitle', 'expectedAuthor', 'provider'],
             'get_shared_cover' => ['action', 'folder', 'revision'],
             default => throw nas_error('INVALID_REQUEST'),
         };
@@ -448,7 +449,12 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
         }
         if ($action === 'episode_titles') {
             if (!nas_episode_available()) { throw nas_episode_error(); }
-            nas_json(['ok' => true] + nas_episode_titles($input['productId'] ?? null, array_key_exists('page', $input) ? $input['page'] : 1, $_SESSION));
+            $provider = $input['provider'] ?? 'series';
+            if (!is_string($provider) || !in_array($provider, ['series', 'novelpia'], true)) { throw nas_episode_error('EPISODE_INVALID_REQUEST'); }
+            $page = array_key_exists('page', $input) ? $input['page'] : 1;
+            $result = $provider === 'novelpia' ? nas_novelpia_titles($input['productId'] ?? null, $page, $_SESSION)
+                : nas_episode_titles($input['productId'] ?? null, $page, $_SESSION);
+            nas_json(['ok' => true] + $result);
         }
         $client = new SynologyClient($config, $transport);
         if ($action === 'approval_status') {

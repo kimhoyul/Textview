@@ -922,8 +922,9 @@
     return !!name && !/[\\/\u0000-\u001f\u007f]/.test(name) && name !== '.' && name !== '..' && /\.txt$/i.test(name);
   }
 
-  async function supportsNameSync(operation) {
-    if (nameSyncHealth && nameSyncHealth.endpoint === endpoint && nameSyncHealth.time > Date.now() - 60000) return nameSyncHealth.available;
+  async function supportsNameSync(operation, provider = 'series') {
+    const supports = value => value.available && (provider === 'series' || value.providers.includes(provider));
+    if (nameSyncHealth && nameSyncHealth.endpoint === endpoint && nameSyncHealth.time > Date.now() - 60000) return supports(nameSyncHealth);
     const controller = new AbortController();
     const signal = operation.controller.signal;
     const abort = () => controller.abort();
@@ -938,8 +939,8 @@
       const data = await response.json();
       if (operation.generation !== sequence || signal.aborted || selectedEndpoint !== endpoint) throw failure('CANCELLED');
       const available = response.ok && data?.ok === true && data.episodeRename === true;
-      nameSyncHealth = { endpoint, available, time: Date.now() };
-      return available;
+      nameSyncHealth = { endpoint, available, providers: Array.isArray(data.episodeProviders) ? data.episodeProviders : [], time: Date.now() };
+      return supports(nameSyncHealth);
     } catch (error) {
       if (signal.aborted || operation.generation !== sequence) throw failure('CANCELLED');
       if (error instanceof NASError) throw error;
@@ -962,14 +963,14 @@
     if (currentPath === folder) renderDirectory();
   }
 
-  async function syncEpisodeNames({ folder, productId, title, author, pages } = {}) {
+  async function syncEpisodeNames({ folder, productId, title, author, pages, provider = 'series' } = {}) {
     const summary = { renamed: 0, unchanged: 0, skipped: 0, conflicts: 0, results: [] };
     if (!canSyncEpisodeNames()) return null;
     const model = window.TextviewEpisodeTitleModel;
     const safeText = (value, empty = false) => typeof value === 'string' && (empty || !!value.trim()) && [...value].length <= 300 && !/[\u0000-\u001f\u007f]/.test(value);
     if (!model?.numberFor || typeof folder !== 'string' || folder === '/' || !folder.startsWith('/') || folder.endsWith('/') ||
         /[\u0000-\u001f\u007f]/.test(folder) || !/^[1-9][0-9]{0,11}$/.test(productId || '') || typeof productId !== 'string' ||
-        !safeText(title) || !safeText(author, true) || !Array.isArray(pages) || pages.length > 334 ||
+        !['series', 'novelpia'].includes(provider) || !safeText(title) || !safeText(author, true) || !Array.isArray(pages) || pages.length > 334 ||
         pages.some(page => !Number.isSafeInteger(page) || page < 1 || page > 334)) return { ...summary, error: 'INVALID_REQUEST' };
     const knownPages = new Set(pages);
     if (!knownPages.size) return summary;
@@ -982,7 +983,7 @@
       if (operation.generation !== sequence || operation.controller.signal.aborted || !authenticated || window.navigator?.onLine === false) throw failure('CANCELLED');
     };
     try {
-      if (!await supportsNameSync(operation)) {
+      if (!await supportsNameSync(operation, provider)) {
         syncMessage('NAS 연결 파일을 업데이트한 뒤 다시 연결해 주세요.', 'error');
         return { ...summary, unsupported: true };
       }
@@ -1042,9 +1043,10 @@
         // A write is sent once. A lost response is reconciled by a later folder scan.
         const data = await request('sync_episode_names', {
           folder, paths: [...allowed.keys()], productId, page, expectedTitle: title, expectedAuthor: author,
+          ...(provider === 'series' ? {} : { provider }),
         }, { signal: operation.controller.signal });
         check();
-        if (data.folder !== folder || data.productId !== productId || data.page !== page || !Array.isArray(data.results) || data.results.length > items.length) throw failure('INVALID_REQUEST');
+        if ((data.provider === undefined ? 'series' : data.provider) !== provider || data.folder !== folder || data.productId !== productId || data.page !== page || !Array.isArray(data.results) || data.results.length > items.length) throw failure('INVALID_REQUEST');
         const seen = new Set();
         const accepted = [];
         for (const item of data.results) {

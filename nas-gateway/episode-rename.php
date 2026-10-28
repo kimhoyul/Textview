@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/novelpia.php';
+
 function nas_episode_identity_key(string $value): string
 {
     if (class_exists('Normalizer')) { $value = Normalizer::normalize($value, Normalizer::FORM_C) ?: $value; }
@@ -71,7 +73,10 @@ function nas_sync_episode_names(SynologyClient $client, array $input, array &$se
     }
     $expectedTitle = nas_episode_text($input['expectedTitle'] ?? null);
     $expectedAuthor = nas_episode_text($input['expectedAuthor'] ?? null, true);
-    $metadata = nas_episode_titles($input['productId'] ?? null, $input['page'] ?? null, $session, $fetcher);
+    $provider = $input['provider'] ?? 'series';
+    if (!is_string($provider) || !in_array($provider, ['series', 'novelpia'], true)) { throw nas_episode_error('EPISODE_INVALID_REQUEST'); }
+    $metadata = $provider === 'novelpia' ? nas_novelpia_titles($input['productId'] ?? null, $input['page'] ?? null, $session, $fetcher)
+        : nas_episode_titles($input['productId'] ?? null, $input['page'] ?? null, $session, $fetcher);
     if (nas_episode_identity_key($expectedTitle) !== nas_episode_identity_key($metadata['title'])
         || ($expectedAuthor !== '' && nas_episode_identity_key($expectedAuthor) !== nas_episode_identity_key($metadata['author']))
         || !nas_episode_folder_matches($folder, $metadata['title'], $metadata['author'])) {
@@ -110,6 +115,7 @@ function nas_sync_episode_names(SynologyClient $client, array $input, array &$se
     }
     $counts = array_count_values(array_column($results, 'status'));
     return ['ok' => true, 'folder' => $folder, 'productId' => $metadata['productId'], 'page' => $metadata['page'],
+        ...($provider === 'novelpia' ? ['provider' => 'novelpia'] : []),
         'title' => $metadata['title'], 'author' => $metadata['author'], 'results' => $results,
         'renamed' => $counts['renamed'] ?? 0, 'unchanged' => $counts['unchanged'] ?? 0,
         'conflicts' => $counts['conflict'] ?? 0, 'skipped' => ($counts['skipped'] ?? 0) + ($counts['missing'] ?? 0)];

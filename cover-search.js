@@ -11,7 +11,21 @@
   let libraryQueue = Promise.resolve();
 
   function clearSeriesCache() {
-    for (const [key, value] of cache) if (value.results.some(result => result.provider === 'series')) cache.delete(key);
+    for (const [key, value] of cache) if (value.results.some(result => ['series', 'novelpia'].includes(result.provider))) cache.delete(key);
+  }
+
+  function searchProvider(id) {
+    return /^(series|novelpia):[1-9][0-9]{0,11}$/.exec(typeof id === 'string' ? id : '')?.[1] || null;
+  }
+
+  function validThumbnail(value, provider) {
+    if (typeof value !== 'string' || value.length > 4096 || /[\u0000-\u0020\u007f]/.test(value)) return false;
+    try {
+      const url = new URL(value);
+      if (url.protocol !== 'https:' || url.username || url.password || url.hash || (url.port && url.port !== '443')) return false;
+      return provider === 'series' ? url.hostname === 'comicthumb-phinf.pstatic.net'
+        : provider === 'novelpia' && url.hostname === 'images.novelpia.com' && url.pathname.startsWith('/imagebox/cover/');
+    } catch { return false; }
   }
 
   function getEndpoint() {
@@ -115,7 +129,7 @@
       try {
         const data = await gateway('cover_search', { query });
         if (!Array.isArray(data.results)) throw new Error(UPDATE_MESSAGE);
-        results = data.results.filter(item => typeof item.id === 'string' && /^series:[0-9]{1,12}$/.test(item.id) && typeof item.title === 'string' && typeof item.token === 'string' && /^[a-f0-9]{48}$/.test(item.token) && typeof item.thumbnailUrl === 'string' && /^https:\/\/comicthumb-phinf\.pstatic\.net\//.test(item.thumbnailUrl)).slice(0, 12).map(item => ({ ...item, provider: 'series', endpoint }));
+        results = data.results.filter(item => item && searchProvider(item.id) && typeof item.title === 'string' && typeof item.token === 'string' && /^[a-f0-9]{48}$/.test(item.token) && validThumbnail(item.thumbnailUrl, searchProvider(item.id))).slice(0, 24).map(item => ({ ...item, provider: searchProvider(item.id), endpoint }));
         clearSeriesCache();
       } catch (error) { primaryError = error; }
     }
@@ -137,7 +151,7 @@
     let results = [];
     let primaryError = null;
     const metadata = rows => rows.filter(item => item && typeof item.title === 'string').map(item => ({
-      ...(/^series:[1-9][0-9]{0,11}$/.test(typeof item.id === 'string' ? item.id : '') ? { id: item.id } : {}),
+      ...(searchProvider(item.id) ? { id: item.id, provider: searchProvider(item.id) } : {}),
       title: item.title,
       author: Array.isArray(item.author) ? item.author.filter(name => typeof name === 'string').join(', ') : typeof item.author === 'string' ? item.author : '',
       sourceName: typeof item.sourceName === 'string' ? item.sourceName : ''
@@ -158,7 +172,7 @@
   }
 
   async function getImage(result) {
-    if (result?.provider === 'series' && result.endpoint === getEndpoint() && /^[a-f0-9]{48}$/.test(result.token || '')) return gateway('cover_download', { token: result.token }, true);
+    if (searchProvider(result?.id) === result?.provider && ['series', 'novelpia'].includes(result.provider) && result.endpoint === getEndpoint() && /^[a-f0-9]{48}$/.test(result.token || '')) return gateway('cover_download', { token: result.token }, true);
     const match = /^openlibrary:([0-9]{1,15})$/.exec(result?.id || '');
     if (result?.provider !== 'openlibrary' || !match) throw new Error('표지를 다시 검색하고 선택해 주세요.');
     const response = await fetchTimed('https://covers.openlibrary.org/b/id/' + match[1] + '-L.jpg?default=false');

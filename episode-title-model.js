@@ -6,6 +6,12 @@
   function authorKey(value) {
     return typeof value === 'string' ? value.normalize('NFC').replace(/\s+/g, '').toLocaleLowerCase('ko') : '';
   }
+  function providerForSource(value) {
+    if (typeof value !== 'string') return null;
+    const source = value.normalize('NFC').replace(/\s+/g, '').toLowerCase();
+    return ['노벨피아', 'novelpia'].includes(source) ? 'novelpia'
+      : ['네이버시리즈', 'naverseries', 'series'].includes(source) ? 'series' : null;
+  }
   function numberFor(fileName, book = '') {
     if (typeof fileName !== 'string') return null;
     let name = fileName.normalize('NFC').replace(/\.txt$/i, '').trim();
@@ -34,7 +40,7 @@
       ? { number, title } : null;
   }
   function normalize(value) {
-    if (!value || typeof value !== 'object' || !/^[1-9][0-9]{0,11}$/.test(value.productId || '') || typeof value.productId !== 'string' ||
+    if (!value || typeof value !== 'object' || (value.provider !== undefined && !['series', 'novelpia'].includes(value.provider)) || !/^[1-9][0-9]{0,11}$/.test(value.productId || '') || typeof value.productId !== 'string' ||
         !text(value.title) || !value.title.trim() || !text(value.author) ||
         !Array.isArray(value.episodes) || value.episodes.length > 10000 ||
         typeof value.checkedAt !== 'number' || !Number.isFinite(value.checkedAt) || value.checkedAt < 0 ||
@@ -48,7 +54,8 @@
       episodes.push({ number: item.number, title: item.title.trim() });
     }
     episodes.sort((a, b) => a.number - b.number);
-    return { productId: value.productId, title: value.title.trim(), author: value.author.trim(), episodes, pages: [...(value.pages || [])].sort((a, b) => a - b), checkedAt: value.checkedAt };
+    const provider = value.provider || 'series';
+    return { provider, productId: value.productId, title: value.title.trim(), author: value.author.trim(), episodes, pages: [...(value.pages || [])].sort((a, b) => a - b), checkedAt: value.checkedAt };
   }
-  window.TextviewEpisodeTitleModel = { numberFor, namedFor, normalize, titleKey, authorKey };
+  window.TextviewEpisodeTitleModel = { numberFor, namedFor, normalize, titleKey, authorKey, providerForSource };
 })();
