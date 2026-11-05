@@ -207,6 +207,45 @@ final class CurlSynologyTransport implements SynologyTransport
             throw $error;
         } finally { curl_close($handle); }
     }
+
+    /** DSM FileStation's binary upload; all sensitive fields stay server-side. */
+    public function postMultipart(string $url, array $fields, array $headers, int $maxBytes, int $timeout): SynologyResponse
+    {
+        if (!extension_loaded('curl') || !($fields['file'] ?? null) instanceof CURLFile
+            || array_key_last($fields) !== 'file') { throw nas_error('NAS_UNREACHABLE'); }
+        $response = new SynologyResponse($this->config['runtime_dir'] . '/buffers');
+        $handle = curl_init($url);
+        if ($handle === false) { $response->close(); throw nas_error('NAS_UNREACHABLE'); }
+        $https = str_starts_with($url, 'https://');
+        $options = [
+            CURLOPT_POST => true, CURLOPT_POSTFIELDS => $fields,
+            CURLOPT_HTTPHEADER => array_merge(['Accept: application/json'], $headers),
+            CURLOPT_FOLLOWLOCATION => false, CURLOPT_MAXREDIRS => 0,
+            CURLOPT_PROTOCOLS => $https ? CURLPROTO_HTTPS : CURLPROTO_HTTP,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_CONNECTTIMEOUT => min((int)$this->config['connect_timeout'], $timeout),
+            CURLOPT_TIMEOUT => $timeout, CURLOPT_NOSIGNAL => true, CURLOPT_VERBOSE => false,
+            CURLOPT_WRITEFUNCTION => static function ($curl, string $chunk) use ($response, $maxBytes): int {
+                return $response->append($chunk, $maxBytes) ? strlen($chunk) : 0;
+            },
+        ];
+        if (is_string($this->config['ca_file'] ?? null) && $this->config['ca_file'] !== '') {
+            $options[CURLOPT_CAINFO] = $this->config['ca_file'];
+        }
+        try {
+            if (!curl_setopt_array($handle, $options) || curl_exec($handle) === false || $response->tooLarge) {
+                throw nas_error('NAS_UNREACHABLE');
+            }
+            $response->httpStatus = (int)curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+            $response->contentType = (string)(curl_getinfo($handle, CURLINFO_CONTENT_TYPE) ?: '');
+            return $response;
+        } catch (Throwable $error) {
+            $response->close();
+            throw $error;
+        } finally { curl_close($handle); }
+    }
+
 }
 
 final class SynologyClient
@@ -343,6 +382,91 @@ final class SynologyClient
         }
         if ($min > 2 || $max < 2) { throw nas_error('NAS_UNREACHABLE'); }
         return 2;
+    }
+
+    /** Discover only DSM's authenticated FileStation upload API, never a caller URL. */
+    private function discoverTxtUpload(): void
+    {
+        if ($this->sid === null) { throw nas_error('SESSION_EXPIRED'); }
+        if (isset($this->apis['SYNO.FileStation.Upload'])) { return; }
+        $response = $this->transport->post($this->baseUrl . '/webapi/entry.cgi', [
+            'api' => 'SYNO.API.Info', 'version' => '1', 'method' => 'query', 'query' => 'SYNO.FileStation.Upload',
+        ], [], (int)$this->config['max_json_bytes'], (int)$this->config['api_timeout']);
+        try {
+            $body = $response->json((int)$this->config['max_json_bytes']);
+            $item = $body['data']['SYNO.FileStation.Upload'] ?? null;
+            if ($response->httpStatus !== 200 || ($body['success'] ?? false) !== true || !is_array($item)
+                || !is_int($item['minVersion'] ?? null) || !is_int($item['maxVersion'] ?? null)
+                || $item['minVersion'] > 2 || $item['maxVersion'] < 2
+                || !is_string($item['path'] ?? null)
+                || preg_match('#^(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\\.cgi$#D', $item['path']) !== 1) {
+                throw nas_error('NAS_UNREACHABLE');
+            }
+            $this->apis['SYNO.FileStation.Upload'] = $item;
+        } finally { $response->close(); }
+    }
+
+    /** Create only a missing TXT in a verified matching work folder. Never overwrite. */
+    public function uploadMissingTxt(string $folder, string $book, string $name, string $filePath, int $bytes): array
+    {
+        self::validatePath($folder, false);
+        self::validatePath($folder . '/' . $name, false);
+        if ($folder === '/' || substr_count($folder, '/') < 2
+            || !function_exists('nas_episode_title_key')
+            || nas_episode_title_key(basename($folder)) !== nas_episode_title_key($book)
+            || $book === '' || strlen($book) > 300
+            || $name === '' || strlen($name) > 240 || !self::isTxtPath($name)
+            || str_starts_with($name, '.') || preg_match('~[\\\\/:*?"<>|\\p{Cc}]~u', $name) === 1
+            || preg_match('/[. ]\\.txt$/uiD', $name) === 1
+            || $bytes < 0 || $bytes > 32 * 1024 * 1024
+            || !is_file($filePath) || is_link($filePath) || filesize($filePath) !== $bytes) {
+            throw nas_error('INVALID_REQUEST');
+        }
+        $info = $this->episodeRenameInfo($folder);
+        $perm = $info['additional']['perm'] ?? [];
+        if ($info === null || ($info['isdir'] ?? false) !== true || ($perm['share_right'] ?? '') === 'RO'
+            || ($perm['acl']['write'] ?? true) === false) { throw nas_error('FORBIDDEN'); }
+
+        // Exact filename and known official number aliases are both existing files.
+        $number = nas_episode_original_number($name, $book) ?? nas_episode_titled_number($name);
+        foreach ($this->episodeRenameEntries($folder) as $item) {
+            $other = $item['name'];
+            $otherNumber = nas_episode_original_number($other, $book) ?? nas_episode_titled_number($other);
+            if (strcasecmp($other, $name) === 0 || ($number !== null && $otherNumber === $number)) {
+                return ['status' => 'exists', 'name' => $name];
+            }
+        }
+        $target = $folder . '/' . $name;
+        if ($this->episodeRenameInfo($target) !== null) { return ['status' => 'exists', 'name' => $name]; }
+        if (!($this->transport instanceof CurlSynologyTransport)) { throw nas_error('NAS_UNREACHABLE'); }
+        $this->discoverTxtUpload();
+        $fields = [
+            'api' => 'SYNO.FileStation.Upload', 'version' => '2', 'method' => 'upload',
+            'path' => $folder, 'create_parents' => 'false', 'overwrite' => 'false',
+            '_sid' => $this->sid,
+        ];
+        $headers = [];
+        if ($this->synoToken !== null) {
+            $fields['SynoToken'] = $this->synoToken;
+            $headers[] = 'X-SYNO-TOKEN: ' . $this->synoToken;
+        }
+        $fields['file'] = new CURLFile($filePath, 'text/plain', $name); // file part must be last.
+        $response = $this->transport->postMultipart(
+            $this->baseUrl . '/webapi/' . $this->apis['SYNO.FileStation.Upload']['path'],
+            $fields, $headers, (int)$this->config['max_json_bytes'], (int)$this->config['download_timeout']
+        );
+        try {
+            $body = $response->json((int)$this->config['max_json_bytes']);
+            if ($response->httpStatus !== 200) { throw nas_error('NAS_UNREACHABLE'); }
+            if (($body['success'] ?? false) !== true) {
+                if ($this->episodeRenameInfo($target) !== null) { return ['status' => 'exists', 'name' => $name]; }
+                self::checkApiResult($body);
+            }
+        } finally { $response->close(); }
+        $confirmed = $this->episodeRenameInfo($target);
+        if (!is_array($confirmed) || ($confirmed['isdir'] ?? null) !== false
+            || ($confirmed['additional']['size'] ?? null) !== $bytes) { throw nas_error('NAS_UNREACHABLE'); }
+        return ['status' => 'uploaded', 'name' => $name, 'bytes' => $bytes];
     }
 
     /** Renaming is discovered only for the authenticated episode-name operation. */

@@ -122,6 +122,7 @@
   let transferWasActive = false;
   let approvalCountdownTimer = 0;
   let nameSyncHealth = null;
+  let missingUploadHealth = null;
   let idleTimer = 0;
   let pendingConnected = false;
   let comicContext = null;
@@ -129,6 +130,7 @@
   const sharedCoverRequests = new Map();
   const sharedCoverContexts = new WeakMap();
   const api = { actions: {}, render, show, hide, setEndpoint, getEndpoint: () => endpoint, canSyncEpisodeNames, syncEpisodeNames, canSyncSharedCovers, findSharedCoverOrigins, getSharedCover, isSharedCoverCurrent,
+    canUploadMissingTXT, supportsMissingTXT, listRemoteTXT, uploadMissingTXT,
     canBrowseComics, listComicFolder, downloadComicPage, setComicContext, showForComics };
   window.TextviewNAS = api;
 
@@ -210,6 +212,7 @@
     bootstrapPromise = null;
     pendingConnected = false;
     nameSyncHealth = null;
+    missingUploadHealth = null;
     sharedCoverRequests.clear();
     currentPath = '/';
     entries = [];
@@ -305,15 +308,23 @@
     if (parentSignal?.aborted) throw failure('CANCELLED');
     parentSignal?.addEventListener('abort', abortFromParent, { once: true });
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.binary ? 120000 : 35000);
-    const headers = { 'Content-Type': 'application/json' };
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.binary || options.upload ? 120000 : 35000);
+    const headers = { 'Content-Type': options.upload ? 'application/octet-stream' : 'application/json' };
     if (action !== 'bootstrap') {
       headers.Authorization = 'Bearer ' + sessionToken;
       headers['X-CSRF-Token'] = csrfToken;
     }
+    if (options.upload) {
+      const item = options.upload;
+      headers['X-Textview-Upload-Folder'] = encodeURIComponent(item.folder);
+      headers['X-Textview-Upload-Book'] = encodeURIComponent(item.book);
+      headers['X-Textview-Upload-Name'] = encodeURIComponent(item.name);
+      headers['X-Textview-Upload-Sha256'] = item.digest;
+      headers['X-Textview-Upload-Size'] = String(item.blob.size);
+    }
     try {
       const response = await fetch(endpoint, {
-        method: 'POST', headers, body: JSON.stringify({ action, ...payload }),
+        method: 'POST', headers, body: options.upload ? options.upload.blob : JSON.stringify({ action, ...payload }),
         credentials: 'omit', cache: 'no-store', redirect: 'error', signal: controller.signal,
       });
       if (!response.ok) throw await responseError(response);
@@ -809,6 +820,70 @@
   }
 
   function canSyncSharedCovers() { return canSyncEpisodeNames(); }
+
+  function canUploadMissingTXT() { return canSyncEpisodeNames(); }
+
+  async function supportsMissingTXT() {
+    if (!canUploadMissingTXT()) return false;
+    const context = { endpoint, sequence, sessionToken };
+    if (missingUploadHealth && missingUploadHealth.endpoint === endpoint && missingUploadHealth.time > Date.now() - 60000) return missingUploadHealth.available;
+    let available = false;
+    try {
+      const response = await fetch(endpoint + '?health=1', {
+        method: 'GET', cache: 'no-store', credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(18000),
+      });
+      const info = await response.json();
+      available = response.ok && info?.ok === true && info.uploadMissingTxt === true;
+    } catch { available = false; }
+    if (context.endpoint !== endpoint || context.sequence !== sequence || context.sessionToken !== sessionToken || !canUploadMissingTXT()) return false;
+    missingUploadHealth = { endpoint, available, time: Date.now() };
+    return available;
+  }
+
+  /** Return a verified full direct-child TXT inventory without writing to NAS. */
+  async function listRemoteTXT(folder) {
+    if (!canUploadMissingTXT() || !sharedCoverSource({ endpoint, folder })) return null;
+    const context = { endpoint, sequence, sessionToken };
+    const current = () => context.endpoint === endpoint && context.sequence === sequence &&
+      context.sessionToken === sessionToken && canUploadMissingTXT();
+    const names = [];
+    let offset = 0, total = 1, pages = 0;
+    while (offset < total) {
+      if (!current()) return null;
+      if (++pages > NAME_SYNC_MAX_ENTRIES / PAGE_LIMIT) throw failure('INVALID_REQUEST');
+      const data = await request('list', { path: folder, offset, limit: PAGE_LIMIT });
+      if (!current()) return null;
+      const page = directoryPage(data, folder, offset);
+      if (page.total > NAME_SYNC_MAX_ENTRIES) throw failure('INVALID_REQUEST');
+      for (const item of page.entries) {
+        if (!item.isDir && directChild(item.path, folder) && basename(item.path) === item.name) names.push(item.name);
+      }
+      offset = page.nextOffset;
+      total = page.total;
+    }
+    return names;
+  }
+
+  /** Upload one UTF-8 TXT only when the server independently confirms it is absent. */
+  async function uploadMissingTXT({ folder, book, name, text } = {}) {
+    if (!canUploadMissingTXT() || !sharedCoverSource({ endpoint, folder })) return null;
+    if (typeof book !== 'string' || !book.trim() || [...book].length > 100 ||
+        typeof name !== 'string' || !/\.txt$/i.test(name) || /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(name) ||
+        name.startsWith('.') || /[. ]\.txt$/i.test(name) || typeof text !== 'string') throw failure('INVALID_REQUEST');
+    const blob = new Blob([text], { type: 'application/octet-stream' });
+    if (blob.size > MAX_FILE_BYTES || new TextEncoder().encode(name).length > 240) throw failure('TOO_LARGE');
+    if (!crypto?.subtle) throw failure('INVALID_REQUEST', '보안 연결(HTTPS)에서만 NAS에 업로드할 수 있습니다.');
+    const context = { endpoint, sequence, sessionToken };
+    const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))]
+      .map(value => value.toString(16).padStart(2, '0')).join('');
+    if (context.endpoint !== endpoint || context.sequence !== sequence || context.sessionToken !== sessionToken || !canUploadMissingTXT()) return null;
+    const data = await request('upload_missing_txt', {}, { upload: { blob, folder, book, name, digest } });
+    if (context.endpoint !== endpoint || context.sequence !== sequence || context.sessionToken !== sessionToken || !canUploadMissingTXT()) return null;
+    if (data.folder !== folder || data.name !== name || !['uploaded', 'exists'].includes(data.status)
+        || (data.status === 'uploaded' && data.bytes !== blob.size)) throw failure('INVALID_REQUEST');
+    return data;
+  }
+
 
   async function findSharedCoverOrigins(books) {
     if (!canSyncSharedCovers()) return null;
@@ -1504,6 +1579,7 @@
     if (busy) throw new Error('진행 중인 요청을 먼저 끝내 주세요.');
     endpoint = url.href;
     nameSyncHealth = null;
+    missingUploadHealth = null;
     resetSession();
     clearSecrets(true);
     setOtpOpen(false);
