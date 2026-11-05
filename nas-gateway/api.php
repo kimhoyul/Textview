@@ -6,6 +6,7 @@ require_once __DIR__ . '/cover-search.php';
 require_once __DIR__ . '/episode-titles.php';
 require_once __DIR__ . '/episode-rename.php';
 require_once __DIR__ . '/shared-cover.php';
+require_once __DIR__ . '/upload-missing.php';
 
 function nas_private_directory(string $directory): void
 {
@@ -82,10 +83,10 @@ function nas_cors(array $config): bool
     if (strtoupper(nas_request_header('Access-Control-Request-Method')) !== 'POST') { throw nas_error('FORBIDDEN'); }
     $requested = nas_request_header('Access-Control-Request-Headers');
     foreach ($requested === '' ? [] : explode(',', $requested) as $name) {
-        if (!in_array(strtolower(trim($name)), ['authorization', 'content-type', 'x-csrf-token'], true)) { throw nas_error('FORBIDDEN'); }
+        if (!in_array(strtolower(trim($name)), ['authorization', 'content-type', 'x-csrf-token', 'x-textview-upload-folder', 'x-textview-upload-book', 'x-textview-upload-name', 'x-textview-upload-sha256', 'x-textview-upload-size'], true)) { throw nas_error('FORBIDDEN'); }
     }
     header('Access-Control-Allow-Methods: POST');
-    header('Access-Control-Allow-Headers: Authorization, Content-Type, X-CSRF-Token');
+    header('Access-Control-Allow-Headers: Authorization, Content-Type, X-CSRF-Token, X-Textview-Upload-Folder, X-Textview-Upload-Book, X-Textview-Upload-Name, X-Textview-Upload-Sha256, X-Textview-Upload-Size');
     header('Access-Control-Max-Age: 600');
     http_response_code(204);
     return true;
@@ -386,7 +387,7 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             nas_json(['ok' => true, 'ready' => $phpReady && $curlReady && $sessionReady,
                 'php' => PHP_VERSION, 'curl' => $curlReady, 'session' => $sessionReady,
                 'gatewayVersion' => (string)($config['gateway_version'] ?? 'nas6'),
-                'coverSearch' => nas_cover_available(), 'episodeTitles' => nas_episode_available(), 'episodeRename' => nas_episode_available(), 'sharedCover' => true, 'comicFiles' => true,
+                'coverSearch' => nas_cover_available(), 'episodeTitles' => nas_episode_available(), 'episodeRename' => nas_episode_available(), 'sharedCover' => true, 'comicFiles' => true, 'uploadMissingTxt' => true,
                 'coverProviders' => ['series', 'novelpia'], 'episodeProviders' => ['series', 'novelpia']]);
         }
         if (nas_cors($config)) { return; }
@@ -395,15 +396,21 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             throw new GatewayError('INVALID_REQUEST', 405, 'POST 요청만 사용할 수 있습니다.');
         }
         if (($_SERVER['QUERY_STRING'] ?? '') !== '') { throw nas_error('INVALID_REQUEST'); }
-        if (strtolower(trim(explode(';', nas_request_header('Content-Type'))[0])) !== 'application/json') { throw nas_error('INVALID_REQUEST'); }
-        $maximum = (int)$config['max_request_bytes'];
-        if (isset($_SERVER['CONTENT_LENGTH']) && (int)$_SERVER['CONTENT_LENGTH'] > $maximum) { throw nas_error('INVALID_REQUEST'); }
-        $raw = file_get_contents('php://input', false, null, 0, $maximum + 1);
-        if (!is_string($raw) || strlen($raw) > $maximum) { throw nas_error('INVALID_REQUEST'); }
-        try { $input = json_decode($raw, true, 16, JSON_THROW_ON_ERROR); }
-        catch (JsonException) { throw nas_error('INVALID_REQUEST'); }
-        unset($raw);
-        $action = is_array($input) && is_string($input['action'] ?? null) ? $input['action'] : '';
+        $binaryUpload = strtolower(trim(explode(';', nas_request_header('Content-Type'))[0])) === 'application/octet-stream';
+        if (!$binaryUpload && strtolower(trim(explode(';', nas_request_header('Content-Type'))[0])) !== 'application/json') { throw nas_error('INVALID_REQUEST'); }
+        if ($binaryUpload) {
+            $input = ['action' => 'upload_missing_txt'];
+            $action = 'upload_missing_txt';
+        } else {
+            $maximum = (int)$config['max_request_bytes'];
+            if (isset($_SERVER['CONTENT_LENGTH']) && (int)$_SERVER['CONTENT_LENGTH'] > $maximum) { throw nas_error('INVALID_REQUEST'); }
+            $raw = file_get_contents('php://input', false, null, 0, $maximum + 1);
+            if (!is_string($raw) || strlen($raw) > $maximum) { throw nas_error('INVALID_REQUEST'); }
+            try { $input = json_decode($raw, true, 16, JSON_THROW_ON_ERROR); }
+            catch (JsonException) { throw nas_error('INVALID_REQUEST'); }
+            unset($raw);
+            $action = is_array($input) && is_string($input['action'] ?? null) ? $input['action'] : '';
+        }
         $allowed = match ($action) {
             'bootstrap', 'status', 'logout', 'approval_status', 'approval_cancel' => ['action'],
             'login' => ['action', 'username', 'password', 'otp', 'authMode'],
@@ -416,6 +423,7 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
             'episode_titles' => ['action', 'productId', 'page', 'provider'],
             'sync_episode_names' => ['action', 'folder', 'paths', 'productId', 'page', 'expectedTitle', 'expectedAuthor', 'provider'],
             'get_shared_cover' => ['action', 'folder', 'revision'],
+            'upload_missing_txt' => ['action'],
             default => throw nas_error('INVALID_REQUEST'),
         };
         foreach (array_keys($input) as $key) { if (!in_array($key, $allowed, true)) { throw nas_error('INVALID_REQUEST'); } }
@@ -532,6 +540,12 @@ function nas_run(?array $configOverride = null, ?SynologyTransport $transport = 
         $client->restoreAuthentication($_SESSION['dsm']);
         if ($action === 'get_shared_cover') {
             $result = nas_get_shared_cover($client, $input['folder'] ?? null, $input['revision']);
+            $_SESSION['last_seen'] = time();
+            $result['expiresIn'] = nas_expiry($config, $_SESSION);
+            nas_json($result);
+        }
+        if ($action === 'upload_missing_txt') {
+            $result = nas_upload_missing_txt($client, $config);
             $_SESSION['last_seen'] = time();
             $result['expiresIn'] = nas_expiry($config, $_SESSION);
             nas_json($result);

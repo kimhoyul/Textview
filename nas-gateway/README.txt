@@ -21,6 +21,7 @@ coverProviders와 episodeProviders에 series, novelpia가 있으면 두 출처�
 노벨피아의 공개 표지와 EP 번호가 있는 공개 목차만 조회합니다. 공지와 번호 없는 BONUS 항목은 자동 회차 연결에서 제외합니다.
 gatewayVersion: nas4는 업로드한 서버 코드 버전입니다. 실제 NAS 승인 로그인 성공을 뜻하지 않습니다.
 이 확인 요청은 로그인, NAS 조회, 세션 생성, 임시 파일 생성을 하지 않습니다.
+업로드가 적용된 서버에서는 health=1 응답에 uploadMissingTxt: true가 표시됩니다. 앱은 인증된 연결에서 작품별 원본 폴더에 없는 TXT만 업로드하며, 기존 NAS 파일을 덮어쓰거나 삭제하지 않습니다. 설정 파일(config.php)은 변경하지 마세요.
 
 DSM 연결 주소는 config.php의 https://chhc007.synology.me:9999입니다.
 DSM 연결은 항상 인증서를 확인합니다. HTTP 전환이나 인증서 검사 해제는 하지 않습니다.

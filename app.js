@@ -49,6 +49,12 @@
   const nasOriginJobs = new Map();
   let nasNameSyncRunning = false;
   let nasNameSyncWake = false;
+  const pendingNASUploads = new Set();
+  const nasUploadCheckedAt = new Map();
+  const NAS_UPLOAD_RECHECK = 5 * 60 * 1000;
+  const NAS_UPLOAD_RETRY = 60 * 1000;
+  let nasUploadRunning = false;
+  let nasUploadWake = false;
   let homeError = '';
   let settings = { ...DEFAULTS };
   let busy = false;
@@ -520,7 +526,7 @@
     if (!db || !inBook(book).length || !safe) return false;
     const old = nasOrigin(book);
     if (old && old.folder !== safe.folder && !replace) return false;
-    if (old && old.endpoint === safe.endpoint && old.folder === safe.folder && (!replace || !old.syncedKey)) { queueNASNameSync(book); return true; }
+    if (old && old.endpoint === safe.endpoint && old.folder === safe.folder && (!replace || !old.syncedKey)) { queueNASNameSync(book); queueNASMissingUpload(book); return true; }
     const generation = episodeTitleGeneration.get(book) || 0;
     const record = { key: 'nas-origin:' + book, value: { ...safe, syncedKey: '' }, updatedAt: Date.now() };
     await dbRequest('state', 'put', record);
@@ -528,6 +534,7 @@
     memoryState.set(record.key, record);
     nasNameRetryAfter.delete(book);
     queueNASNameSync(book);
+    queueNASMissingUpload(book, true);
     return true;
     } finally { if (nasOriginJobs.get(book) === lock) nasOriginJobs.delete(book); release(); }
   }
@@ -591,16 +598,105 @@
       }
     } finally {
       nasNameSyncRunning = false;
+      void drainNASMissingUpload();
       if (nasNameSyncWake) { nasNameSyncWake = false; queueMicrotask(() => { void drainNASNameSync(); }); }
     }
   }
 
+
+  function queueNASMissingUpload(book, force = false) {
+    if (!db || !inBook(book).length || !nasOrigin(book)) return;
+    if (force) nasUploadCheckedAt.delete(book);
+    if (Date.now() < (nasUploadCheckedAt.get(book) || 0)) return;
+    pendingNASUploads.add(book);
+    if (nasUploadRunning) { nasUploadWake = true; return; }
+    void drainNASMissingUpload();
+  }
+
+  async function drainNASMissingUpload() {
+    const nas = window.TextviewNAS;
+    if (nasUploadRunning || nasNameSyncRunning || !db || busy || switching || editingReader ||
+        !navigator.onLine || !nas?.canUploadMissingTXT?.()) return;
+    nasUploadRunning = true;
+    try {
+      for (const book of [...pendingNASUploads]) {
+        if (!db || busy || switching || editingReader || nasNameSyncRunning || !navigator.onLine || !nas.canUploadMissingTXT()) break;
+        if (episodeTitleJobs.has(book) || Date.now() < (nasUploadCheckedAt.get(book) || 0)) continue;
+        const origin = nasOrigin(book);
+        if (!origin || !inBook(book).length) { pendingNASUploads.delete(book); continue; }
+        const generation = episodeTitleGeneration.get(book) || 0;
+        const connection = nas.getEndpoint();
+        const valid = () => !!db && !busy && !switching && !editingReader && !!navigator.onLine &&
+          nas.canUploadMissingTXT() && nas.getEndpoint() === connection &&
+          nasOrigin(book)?.folder === origin.folder && (episodeTitleGeneration.get(book) || 0) === generation;
+        const update = (text) => {
+          if (!valid()) return;
+          episodeTitleStatus.set(book, { ...episodeTitleStatus.get(book), uploadMessage: text });
+          renderBookDetail();
+        };
+        let uploaded = 0, skipped = 0;
+        try {
+          if (!await nas.supportsMissingTXT()) {
+            update('NAS 서버에 TXT 업로드 기능을 적용하면 누락된 파일을 전송합니다.');
+            nasUploadCheckedAt.set(book, Date.now() + NAS_UPLOAD_RECHECK);
+            pendingNASUploads.delete(book);
+            continue;
+          }
+          const names = await nas.listRemoteTXT(origin.folder);
+          if (!names || !valid()) break;
+          const model = window.TextviewEpisodeTitleModel;
+          const remoteNames = new Set(names.map(name => name.normalize('NFC').toLocaleLowerCase('ko')));
+          const remoteNumbers = new Set(names.map(name => model.numberFor(name, book) ?? model.namedFor(name)?.number).filter(Boolean));
+          const localChapters = inBook(book);
+          const localCounts = new Map();
+          for (const chapter of localChapters) {
+            const num = episodeNumber(chapter);
+            if (num) localCounts.set(num, (localCounts.get(num) || 0) + 1);
+          }
+          for (const chapter of localChapters) {
+            if (!valid() || !inBook(book).some(item => item.id === chapter.id)) break;
+            const num = episodeNumber(chapter);
+            const nameKey = chapter.name.normalize('NFC').toLocaleLowerCase('ko');
+            if (remoteNames.has(nameKey) || (num && (remoteNumbers.has(num) || localCounts.get(num) > 1))) { skipped++; continue; }
+            const content = await dbRequest('texts', 'get', chapter.id);
+            if (!valid() || !inBook(book).some(item => item.id === chapter.id)) break;
+            if (typeof content?.text !== 'string') { skipped++; continue; }
+            const outcome = await nas.uploadMissingTXT({ folder: origin.folder, book, name: chapter.name, text: content.text });
+            if (!valid() || !outcome) break;
+            if (outcome.status === 'uploaded') uploaded++;
+            else skipped++;
+            remoteNames.add(nameKey);
+            if (num) remoteNumbers.add(num);
+            if (uploaded) update(`NAS에 없는 TXT ${uploaded}개 업로드 완료 · 계속 확인 중…`);
+          }
+          if (!valid()) break;
+          pendingNASUploads.delete(book);
+          nasUploadCheckedAt.set(book, Date.now() + NAS_UPLOAD_RECHECK);
+          update(uploaded ? `NAS에 없던 TXT ${uploaded}개를 업로드했습니다.` : 'NAS TXT 파일을 확인했습니다.');
+          if (uploaded) showToast(`${book} · NAS에 없던 TXT ${uploaded}개 업로드 완료`);
+        } catch (error) {
+          if (!valid()) break;
+          pendingNASUploads.delete(book);
+          nasUploadCheckedAt.set(book, Date.now() + NAS_UPLOAD_RETRY);
+          update((uploaded ? `${uploaded}개 업로드 완료 · ` : '') + 'NAS 누락 파일 업로드를 완료하지 못했습니다. 다시 연결하면 재시도합니다.');
+        }
+      }
+    } finally {
+      nasUploadRunning = false;
+      if (nasUploadWake) {
+        nasUploadWake = false;
+        queueMicrotask(() => { void drainNASMissingUpload(); });
+      }
+    }
+  }
+
   function nasIdle(forceCovers = false) {
-    for (const book of new Set(chapters.map(chapter => chapter.book))) queueNASNameSync(book);
+    for (const book of new Set(chapters.map(chapter => chapter.book))) { queueNASNameSync(book); queueNASMissingUpload(book); }
     void queueSharedCoverSync(forceCovers);
   }
   function nasConnected() {
     nasNameRetryAfter.clear();
+    nasUploadCheckedAt.clear();
     nasIdle(true);
   }
   async function nasFolderLoaded(source) {
@@ -611,6 +707,7 @@
       }
     }
     void queueSharedCoverSync();
+    for (const book of new Set(chapters.map(chapter => chapter.book))) if (normalizedNASOrigin(book, source)) queueNASMissingUpload(book, true);
   }
 
   async function nasAlias(book, file, decoded) {
@@ -1456,6 +1553,7 @@
       await openChapter(id);
     }
     renderBooks(book);
+    if (added) queueNASMissingUpload(book, true);
     return { added, skipped, failed, details };
   }
 
@@ -1489,6 +1587,8 @@
     sharedCoverCheckedAt.delete(book);
     pendingNASNames.delete(book);
     nasNameRetryAfter.delete(book);
+    pendingNASUploads.delete(book);
+    nasUploadCheckedAt.delete(book);
     try {
       await new Promise((resolve, reject) => {
         const tx = db.transaction(['chapters', 'texts', 'state'], 'readwrite');
