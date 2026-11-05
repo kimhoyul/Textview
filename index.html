@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="호율 시리즈">
   <meta name="description" content="소설 TXT와 만화 이미지를 기기에 보관하고 인터넷 없이 읽는 호율 시리즈">
-  <meta name="app-version" content="2.10.2">
+  <meta name="app-version" content="2.10.3">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/hoyul-flat-apple-touch.png">
   <link rel="icon" type="image/png" href="./icons/hoyul-flat-192.png">
@@ -75,12 +75,12 @@
       flex: 0 0 auto; padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
       border-bottom: 1px solid var(--reader-control-border); background: var(--reader-control-bg);
     }
-    #readerEditor #editPasteAll {
+    #readerEditor #editSelectAll {
       min-height: 44px; padding: 9px 12px; border: 1px solid var(--reader-control-accent);
       border-radius: 9px; background: transparent; color: var(--reader-control-accent);
       font-size: 13px; font-weight: 650;
     }
-    #readerEditor #editPasteAll:disabled { opacity: .45; }
+    #readerEditor #editSelectAll:disabled { opacity: .45; }
     .reader-editor-tools-note { color: var(--reader-control-muted); font-size: 11px; }
     .reader-editor-heading { min-width: 0; text-align: center; }
     #editTitle { margin: 0; font-size: 16px; line-height: 1.4; }
@@ -210,7 +210,6 @@
     let editorDB = null;
     let opening = false;
     let saving = false;
-    let pasting = false;
     let closing = false;
     let editContext = null;
     let editorGeneration = 0;
@@ -218,7 +217,7 @@
     editor.id = 'readerEditor';
     editor.hidden = true;
     editor.setAttribute('aria-labelledby', 'editTitle');
-    editor.innerHTML = '<header class="reader-editor-header"><button id="editCancel" type="button">취소</button><div class="reader-editor-heading"><h2 id="editTitle">본문 편집</h2><p id="editMeta"></p></div><button id="editSave" type="button">저장</button></header><div class="reader-editor-tools"><button id="editPasteAll" type="button" disabled>클립보드로 본문 전체 교체</button><span class="reader-editor-tools-note">저장 전에는 원본 유지</span></div><textarea id="editText" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" aria-label="현재 TXT 본문"></textarea><p id="editError" role="status"></p>';
+    editor.innerHTML = '<header class="reader-editor-header"><button id="editCancel" type="button">취소</button><div class="reader-editor-heading"><h2 id="editTitle">본문 편집</h2><p id="editMeta"></p></div><button id="editSave" type="button">저장</button></header><div class="reader-editor-tools"><button id="editSelectAll" type="button" disabled>현재 본문 전체 선택</button><span class="reader-editor-tools-note">붙여넣기 후 저장</span></div><textarea id="editText" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" aria-label="현재 TXT 본문"></textarea><p id="editError" role="status"></p>';
     readerShell.appendChild(editor);
     function reading() { return !reader.hidden; }
     function modalOpen() { return !editor.hidden || closing || !!document.querySelector('dialog[open]'); }
@@ -461,13 +460,12 @@
       const title = $('title').textContent;
       const savedRatio = context.ratio;
       opening = true;
-      pasting = false;
       lastFocus = document.activeElement;
       $('editMeta').textContent = book + ' · ' + title;
       $('editText').value = '';
       $('editText').disabled = true;
       $('editSave').disabled = true;
-      $('editPasteAll').disabled = true;
+      $('editSelectAll').disabled = true;
       $('editCancel').disabled = false;
       $('editError').textContent = '본문을 여는 중…';
       editor.dataset.wrap = window.TextviewReaderLayout?.getState().settings.wrap || 'word';
@@ -496,7 +494,7 @@
         $('editText').value = original;
         $('editText').disabled = false;
         $('editSave').disabled = false;
-        $('editPasteAll').disabled = false;
+        $('editSelectAll').disabled = false;
         $('editError').textContent = '';
         requestAnimationFrame(() => {
           if (editor.hidden || generation !== editorGeneration) return;
@@ -543,54 +541,18 @@
     });
     $('editBtn').addEventListener('click', () => { void openEditor(); });
     $('editCancel').addEventListener('click', () => { void closeEditor(); });
-    $('editPasteAll').addEventListener('click', async () => {
-      if (editor.hidden || !snapshot || !editorDB || opening || saving || closing || pasting || $('editText').disabled) return;
-      if (typeof navigator.clipboard?.readText !== 'function') {
-        $('editError').textContent = '클립보드를 읽을 수 없습니다. 본문을 전체 선택한 뒤 직접 붙여넣어 주세요.';
+    $('editSelectAll').addEventListener('click', () => {
+      if (editor.hidden || !snapshot || !editorDB || opening || saving || closing || $('editText').disabled) return;
+      const field = $('editText');
+      if (!field.value.length) {
+        $('editError').textContent = '선택할 본문이 없습니다.';
         return;
       }
-      // Safari needs a direct click-to-read call before any await or dialog.
-      const generation = editorGeneration;
-      const originalSnapshot = snapshot;
-      pasting = true;
-      $('editPasteAll').disabled = true;
-      $('editSave').disabled = true;
-      $('editError').textContent = '클립보드를 읽는 중…';
-      try {
-        const text = await navigator.clipboard.readText();
-        if (editor.hidden || generation !== editorGeneration || snapshot !== originalSnapshot) return;
-        if (typeof text !== 'string' || !text.trim()) {
-          $('editError').textContent = '클립보드에 텍스트가 없습니다. 복사한 뒤 다시 시도해 주세요.';
-          return;
-        }
-        if (new Blob([text]).size > 32 * 1024 * 1024) {
-          $('editError').textContent = '본문은 32 MB까지 저장할 수 있습니다.';
-          return;
-        }
-        if (text === $('editText').value) {
-          $('editError').textContent = '현재 본문과 같은 내용입니다.';
-          return;
-        }
-        if (!confirm('현재 편집 중인 본문 전체를 클립보드 내용으로 교체할까요?\n저장 전까지 원본은 바뀌지 않습니다.')) {
-          $('editError').textContent = '';
-          return;
-        }
-        if (editor.hidden || generation !== editorGeneration || snapshot !== originalSnapshot) return;
-        $('editText').value = text;
-        $('editText').setSelectionRange(0, 0);
-        $('editText').scrollTop = 0;
-        $('editError').textContent = '본문 전체를 교체했습니다. 저장을 누르면 적용됩니다.';
-      } catch {
-        if (!editor.hidden && generation === editorGeneration && snapshot === originalSnapshot) {
-          $('editError').textContent = '클립보드를 읽지 못했습니다. 아이폰의 붙여넣기 요청을 허용하거나 직접 붙여넣어 주세요.';
-        }
-      } finally {
-        if (!editor.hidden && generation === editorGeneration && snapshot === originalSnapshot) {
-          pasting = false;
-          $('editPasteAll').disabled = false;
-          $('editSave').disabled = false;
-        }
-      }
+      // Keep this inside the click gesture so iPhone Safari can focus the editor.
+      field.focus({ preventScroll: true });
+      field.select();
+      field.setSelectionRange(0, field.value.length);
+      $('editError').textContent = '본문 전체를 선택했습니다. 붙여넣기로 교체한 뒤 저장하세요.';
     });
     window.addEventListener('beforeunload', event => {
       if (!saving && !editor.hidden && snapshot && $('editText').value !== snapshot.text) { event.preventDefault(); event.returnValue = ''; }
@@ -627,7 +589,7 @@
       if (bytes > 32 * 1024 * 1024) { $('editError').textContent = '본문은 32 MB까지 저장할 수 있습니다.'; return; }
       if (text === snapshot.text) { closeEditor(); return; }
       saving = true;
-      for (const id of ['editSave', 'editCancel', 'editPasteAll', 'editText']) $(id).disabled = true;
+      for (const id of ['editSave', 'editCancel', 'editSelectAll', 'editText']) $(id).disabled = true;
       $('editError').textContent = '저장 중…';
       try {
         await commitEdit(snapshot, text, bytes);
@@ -642,7 +604,7 @@
         if (error?.name === 'QuotaExceededError') $('editError').textContent = '저장 공간이 부족합니다. 수정 내용은 이 창에 남아 있습니다.';
         else $('editError').textContent = error?.message || '저장하지 못했습니다. 수정 내용을 복사해 보관해 주세요.';
         saving = false;
-        for (const id of ['editSave', 'editCancel', 'editPasteAll', 'editText']) $(id).disabled = false;
+        for (const id of ['editSave', 'editCancel', 'editSelectAll', 'editText']) $(id).disabled = false;
       }
     });
   });
