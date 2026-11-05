@@ -634,7 +634,7 @@
   // Older cover records did not retain search metadata. Only exact titles with
   // one consistent author/source can safely supply it without a new selection.
   function matchingCoverCredits(book, results) {
-    const titleKey = title => String(title || '').normalize('NFC').replace(/\[(?:독점|완결|연재)\]/g, '').replace(/\s+/g, '').toLocaleLowerCase('ko');
+    const titleKey = title => String(title || '').normalize('NFC').replace(/\[(?:독점|완결|연재)\]/g, '').replace(/\s+/g, '').toLocaleLowerCase('ko').replace(/[.。]$/u, '');
     const matches = results.filter(item => titleKey(item.title) === titleKey(book));
     if (!matches.length) return null;
     const credits = matches.map(coverCredits);

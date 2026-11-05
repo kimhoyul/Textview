@@ -10,6 +10,13 @@ function nas_episode_identity_key(string $value): string
     return strtolower(preg_replace('/\s+/u', '', $value) ?? '');
 }
 
+/** A final sentence-ending period is not part of the work's identity. */
+function nas_episode_title_key(string $value): string
+{
+    $key = nas_episode_identity_key($value);
+    return preg_replace('/[.。]$/u', '', $key) ?? $key;
+}
+
 function nas_episode_folder_matches(string $folder, string $title, string $author): bool
 {
     $name = basename($folder);
@@ -21,7 +28,7 @@ function nas_episode_folder_matches(string $folder, string $title, string $autho
         $name = preg_replace('/\s+[1-9][0-9]{0,4}\s*[-~]\s*[1-9][0-9]{0,4}\s*(?:화|회)?\s*$/u', '', $name) ?? '';
         if ($name === $previous) { break; }
     }
-    return nas_episode_identity_key($name) === nas_episode_identity_key($title);
+    return nas_episode_title_key($name) === nas_episode_title_key($title);
 }
 
 /** Numeric-only originals share the app's strict matching rules. Named TXT files are preserved. */
@@ -77,7 +84,7 @@ function nas_sync_episode_names(SynologyClient $client, array $input, array &$se
     if (!is_string($provider) || !in_array($provider, ['series', 'novelpia'], true)) { throw nas_episode_error('EPISODE_INVALID_REQUEST'); }
     $metadata = $provider === 'novelpia' ? nas_novelpia_titles($input['productId'] ?? null, $input['page'] ?? null, $session, $fetcher)
         : nas_episode_titles($input['productId'] ?? null, $input['page'] ?? null, $session, $fetcher);
-    if (nas_episode_identity_key($expectedTitle) !== nas_episode_identity_key($metadata['title'])
+    if (nas_episode_title_key($expectedTitle) !== nas_episode_title_key($metadata['title'])
         || ($expectedAuthor !== '' && nas_episode_identity_key($expectedAuthor) !== nas_episode_identity_key($metadata['author']))
         || !nas_episode_folder_matches($folder, $metadata['title'], $metadata['author'])) {
         throw new GatewayError('EPISODE_IDENTITY_MISMATCH', 409, 'NAS 폴더와 작품 정보가 일치하지 않아 파일 이름을 바꾸지 않았습니다.');

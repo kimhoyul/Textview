@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   function titleKey(value) {
-    return typeof value === 'string' ? value.normalize('NFC').replace(/\[(?:독점|완결|연재)\]/g, '').replace(/\s+/g, '').toLocaleLowerCase('ko') : '';
+    return typeof value === 'string' ? value.normalize('NFC').replace(/\[(?:독점|완결|연재)\]/g, '').replace(/\s+/g, '').toLocaleLowerCase('ko').replace(/[.。]$/u, '') : '';
   }
   function authorKey(value) {
     return typeof value === 'string' ? value.normalize('NFC').replace(/\s+/g, '').toLocaleLowerCase('ko') : '';

@@ -27,8 +27,8 @@
   }
 
   function normalizedTitle(value) {
-    // These labels do not identify a different edition. Keep all other labels.
-    return normalizedText(value.replace(/\[(?:독점|완결|연재)\]/g, ''));
+    // Edition labels and a final sentence-ending period do not change the work.
+    return normalizedText(value.replace(/\[(?:독점|완결|연재)\]/g, '')).replace(/[.。]$/u, '');
   }
 
   async function fetchTimed(url, options = {}) {
