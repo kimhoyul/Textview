@@ -198,8 +198,9 @@ function nas_novelpia_parse_episodes(string $html, string $productId, int $index
                 if ($text === 'BONUS') { $bonus = true; }
                 if (preg_match('/^EP\.\s*([1-9][0-9]{0,4})$/D', $text, $match) === 1) { $number = (int)$match[1]; }
             }
-            if ($bonus && $number === null) { continue; }
-            if ($number === null || $number > 10000 || $number <= $lastNumber || $bonus) { throw nas_episode_error('EPISODE_NUMBERING_UNSUPPORTED'); }
+            // Notices and BONUS entries have no ordinary EP identity. Never guess one.
+            if ($bonus || $number === null) { continue; }
+            if ($number > 10000 || $number <= $lastNumber) { throw nas_episode_error('EPISODE_NUMBERING_UNSUPPORTED'); }
             // Paid chapters keep their public heading here too; their click
             // handler opens sign-in instead of a viewer, and is never followed.
             $heading = $xpath->query('.//td[contains(concat(" ", normalize-space(@class), " "), " font12 ")]/b[1]', $row)?->item(0);
@@ -253,16 +254,17 @@ function nas_novelpia_titles(mixed $productId, mixed $page, array &$session, ?ca
     $last = min($first + 29, $metadata['total']);
     if ($first > $metadata['total']) { throw nas_episode_error('EPISODE_NOT_FOUND'); }
     $found = [];
-    $index = intdiv($first - 1, 20);
-    // BONUS entries may consume slots. Scan forward using explicit EP labels,
-    // and refuse a missing range rather than shifting another chapter's title.
+    $index = max(0, intdiv($first - 1, 20) - 1);
+    // Start one raw page earlier: removed/non-numbered entries can change
+    // physical page offsets, but never the official EP number.
     for ($requests = 0; $requests < 24; $requests++, $index++) {
         if (microtime(true) >= $deadline) { throw nas_episode_error(); }
         $raw = nas_novelpia_raw_page($productId, $index, $session, $fetcher, $deadline);
-        if ($requests === 0 && $raw['episodes'] && $raw['episodes'][0]['number'] > $first) { throw nas_episode_error('EPISODE_NUMBERING_UNSUPPORTED'); }
         foreach ($raw['episodes'] as $episode) {
             $number = $episode['number'];
-            if ($number > $metadata['total']) { throw nas_episode_error('EPISODE_NUMBERING_UNSUPPORTED'); }
+            // Public count can include special entries or omit removed EPs.
+            // Ignore out-of-range numbers rather than assigning a guessed title.
+            if ($number > $metadata['total']) { continue; }
             if ($number >= $first && $number <= $last) {
                 if (isset($found[$number])) { throw nas_episode_error('EPISODE_NUMBERING_UNSUPPORTED'); }
                 $found[$number] = $episode;
@@ -270,7 +272,9 @@ function nas_novelpia_titles(mixed $productId, mixed $page, array &$session, ?ca
         }
         if (count($found) === $last - $first + 1 || $index >= $raw['lastPage']) { break; }
     }
-    if (count($found) !== $last - $first + 1) { throw nas_episode_error('EPISODE_NUMBERING_UNSUPPORTED'); }
+    // Sparse EP ranges are valid. Only verified numbered titles may be used;
+    // missing numbers remain unchanged in the reader and on the NAS.
+    if ($found === []) { throw nas_episode_error('EPISODE_NOT_FOUND'); }
     ksort($found, SORT_NUMERIC);
     $value = ['provider' => 'novelpia', 'productId' => $productId, 'page' => $page] + $metadata
         + ['hasMore' => $last < $metadata['total'], 'episodes' => array_values($found)];
