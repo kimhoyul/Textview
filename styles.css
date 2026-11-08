@@ -323,6 +323,17 @@ progress { width: 100%; margin-top: 18px; }
 .chapter-row.current { outline-offset: -2px; }
 .dialog-actions { display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); flex-shrink: 0; }
 .dialog-actions button { flex: 1; }
+.txt-add-methods { display: grid; grid-template-columns: 1fr; gap: 10px; padding-top: 12px; }
+.txt-add-methods button { width: 100%; min-height: 48px; }
+.library-book-actions { flex-wrap: wrap; }
+.library-book-actions button { flex: 1 1 calc(50% - 8px); min-width: 0; }
+#newTXTDialog form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+#newTXTDialog .dialog-body { padding-top: 14px; }
+#newTXTDialog input { margin-top: 8px; }
+#newTXTDialog textarea { display: block; width: 100%; min-height: 180px; max-height: 38dvh; padding: 12px; resize: vertical; font: inherit; font-size: 16px; line-height: 1.6; border: 1px solid var(--border); border-radius: 10px; color: var(--text); background: var(--panel); }
+#newTXTDialog textarea:focus-visible { outline: 2px solid #8f9f8c; outline-offset: 2px; }
+#newTXTError:not(:empty) { color: var(--text); }
+@media (max-height: 560px) { #newTXTDialog textarea { min-height: 110px; } }
 #renameBookDialog form { display: flex; flex-direction: column; min-height: 0; }
 #renameBookDialog .dialog-body { padding-top: 14px; }
 #renameBookDialog input { margin-top: 8px; }

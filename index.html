@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="호율 시리즈">
   <meta name="description" content="소설 TXT와 만화 이미지를 기기에 보관하고 인터넷 없이 읽는 호율 시리즈">
-  <meta name="app-version" content="2.12.3">
+  <meta name="app-version" content="2.13.0">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/hoyul-flat-apple-touch.png">
   <link rel="icon" type="image/png" href="./icons/hoyul-flat-192.png">
@@ -156,7 +156,10 @@
       <p class="small">다른 소설은 다른 책 이름으로 넣어 주세요. 같은 책 안의 같은 파일명은 덮어쓰지 않고 건너뜁니다.</p>
       <label for="encoding">한글 인코딩</label>
       <select id="encoding"><option value="auto">자동 감지 (UTF-8 / UTF-16 / EUC-KR)</option><option value="utf-8">UTF-8</option><option value="euc-kr">EUC-KR / CP949</option><option value="utf-16le">UTF-16 LE</option></select>
-      <button id="pickFilesBtn" class="primary wide" type="button">TXT 파일 선택 (여러 개 가능)</button>
+      <div class="txt-add-methods">
+        <button id="pickFilesBtn" class="primary" type="button">TXT 파일 선택 (여러 개 가능)</button>
+        <button id="newTXTFromImportBtn" type="button">새 TXT 만들기</button>
+      </div>
       <progress id="importProgress" max="1" value="0" hidden></progress>
       <p id="importStatus" role="status" aria-live="polite"></p>
       <pre id="importDetails" class="details" hidden></pre>
@@ -170,7 +173,7 @@
       <p id="librarySummary" class="small"></p>
     </div>
     <div id="chapterList" class="chapter-list dialog-body"></div>
-    <div class="dialog-actions"><button id="addToBookBtn" type="button">TXT 추가</button><button id="renameBookBtn" type="button">책 이름 변경</button><button id="deleteBookBtn" class="danger" type="button">선택한 책 삭제</button></div>
+    <div class="dialog-actions library-book-actions"><button id="addToBookBtn" type="button">TXT 가져오기</button><button id="newTXTInBookBtn" type="button">새 TXT 만들기</button><button id="renameBookBtn" type="button">책 이름 변경</button><button id="deleteBookBtn" class="danger" type="button">선택한 책 삭제</button></div>
     <details class="library-backup">
       <summary>백업·복원</summary>
       <div class="library-backup-content">
@@ -191,6 +194,24 @@
         <p id="renameBookError" class="small" role="status" aria-live="polite"></p>
       </div>
       <div class="dialog-actions"><button id="renameBookCancel" type="button">취소</button><button id="renameBookSave" class="primary" type="submit">변경 저장</button></div>
+    </form>
+  </dialog>
+  <dialog id="newTXTDialog" aria-labelledby="newTXTDialogTitle">
+    <div class="dialog-head"><h2 id="newTXTDialogTitle">새 TXT 만들기</h2><button id="newTXTCloseTop" type="button">닫기</button></div>
+    <form id="newTXTForm">
+      <div class="dialog-body">
+        <label for="newTXTBook">책 이름</label>
+        <input id="newTXTBook" list="newTXTBookSuggestions" maxlength="100" placeholder="기존 책 또는 새 책 이름" autocomplete="off" required>
+        <datalist id="newTXTBookSuggestions"></datalist>
+        <p class="small">기존 책 이름을 입력하면 해당 책에 TXT가 추가되고, 새 이름을 입력하면 새 책이 만들어집니다.</p>
+        <label for="newTXTName">TXT 이름</label>
+        <input id="newTXTName" maxlength="200" placeholder="예: 1화 또는 프롤로그" autocomplete="off" required>
+        <p class="small">.txt 확장자는 자동으로 붙습니다. 기존 같은 이름의 TXT는 덮어쓰지 않습니다.</p>
+        <label for="newTXTBody">본문</label>
+        <textarea id="newTXTBody" rows="10" placeholder="새 TXT의 내용을 입력하세요. 빈 본문도 저장할 수 있습니다." spellcheck="false"></textarea>
+        <p id="newTXTError" class="small" role="status" aria-live="polite"></p>
+      </div>
+      <div class="dialog-actions"><button id="newTXTCancel" type="button">취소</button><button id="newTXTSave" class="primary" type="submit">저장하고 열기</button></div>
     </form>
   </dialog>
   <button id="checkOfflineBtn" type="button" hidden></button>

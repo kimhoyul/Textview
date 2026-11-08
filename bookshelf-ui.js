@@ -25,7 +25,7 @@
           <h1 id="bookshelfTitle" tabindex="-1">보관함</h1>
         </div>
         <div class="bookshelf-header-actions">
-          <button class="bookshelf-icon-button" type="button" data-shelf-action="import" aria-label="TXT 가져오기">${icon('add')}</button>
+          <button class="bookshelf-icon-button" type="button" data-shelf-action="import" aria-label="TXT 가져오기 또는 새 TXT 만들기">${icon('add')}</button>
           <button class="bookshelf-icon-button" id="bookshelfSearchToggle" type="button" data-shelf-action="search" aria-label="보관함 검색" aria-controls="bookshelfSearchPanel" aria-expanded="false">${icon('search')}</button>
         </div>
       </div>
@@ -184,7 +184,13 @@
     rename.dataset.bookIndex = row.dataset.bookIndex;
     rename.disabled = !state.ready;
     rename.setAttribute('aria-label', book.name + ' 이름 변경');
-    actions.append(manage, rename);
+    const newTXT = element('button', 'bookshelf-item-new-txt', '새 TXT');
+    newTXT.type = 'button';
+    newTXT.dataset.shelfAction = 'new-txt';
+    newTXT.dataset.bookIndex = row.dataset.bookIndex;
+    newTXT.disabled = !state.ready;
+    newTXT.setAttribute('aria-label', book.name + '에 새 TXT 만들기');
+    actions.append(manage, rename, newTXT);
     group.append(row, actions);
     return group;
   }
@@ -277,6 +283,7 @@
     else if (action === 'close-search') setSearch(false);
     else if (action === 'book' && book) runAction('openBook', book.name);
     else if (action === 'rename-book' && book) runAction('renameBook', book.name);
+    else if (action === 'new-txt' && book) runAction('newTXT', book.name);
     else if (action === 'manage-book' && book) runAction('manageBook', book.name);
     else if (action === 'manage') {
       editingBooks = !editingBooks;

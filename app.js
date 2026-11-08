@@ -79,6 +79,8 @@
   let backupFile = null;
   let backupURL = null;
   let renameBookSource = null;
+  let newTXTOrigin = '';
+  let newTXTInitial = null;
   let renameBookReturnToLibrary = false;
 
   // Reading state is synchronously mirrored to localStorage, then persisted to
@@ -213,10 +215,13 @@
   function closeDialog(id) { $(id).close(); }
   function setBusy(value) {
     busy = value;
-    for (const id of ['openBtn', 'emptyImportBtn', 'chaptersBtn', 'exportBtn', 'restoreBtn', 'pickFilesBtn', 'deleteBookBtn', 'addToBookBtn', 'renameBookBtn', 'renameBookSave', 'renameBookCancel']) {
+    for (const id of ['openBtn', 'emptyImportBtn', 'chaptersBtn', 'exportBtn', 'restoreBtn', 'pickFilesBtn', 'deleteBookBtn', 'addToBookBtn', 'newTXTInBookBtn', 'newTXTFromImportBtn', 'newTXTSave', 'newTXTCancel', 'newTXTCloseTop', 'renameBookBtn', 'renameBookSave', 'renameBookCancel']) {
       $(id).disabled = busy || !db;
     }
     $('bookName').disabled = busy;
+    $('newTXTBook').disabled = busy;
+    $('newTXTName').disabled = busy;
+    $('newTXTBody').disabled = busy;
     $('renameBookInput').disabled = busy;
     $('encoding').disabled = busy;
     document.querySelectorAll('dialog [data-close]').forEach(button => { button.disabled = busy; });
@@ -1553,6 +1558,7 @@
     $('librarySummary').textContent = '저장된 TXT ' + list.length + '개 · ' + formatBytes(list.reduce((sum, item) => sum + item.bytes, 0));
     $('deleteBookBtn').disabled = busy || list.length === 0;
     $('renameBookBtn').disabled = busy || list.length === 0;
+    $('newTXTInBookBtn').disabled = busy || list.length === 0;
     $('addToBookBtn').hidden = !shelfActive;
   }
   function openImport(book) {
@@ -1569,6 +1575,113 @@
     $('importDetails').hidden = true;
     $('importProgress').hidden = true;
     showDialog('importDialog');
+  }
+
+
+  function newTXTCurrentDraft() {
+    return { book: $('newTXTBook').value, name: $('newTXTName').value, text: $('newTXTBody').value };
+  }
+
+  function newTXTHasUnsavedChanges() {
+    if (!newTXTInitial) return false;
+    const draft = newTXTCurrentDraft();
+    return Object.keys(newTXTInitial).some(key => draft[key] !== newTXTInitial[key]);
+  }
+
+  function openNewTXT(bookName = null) {
+    if (editingReader || busy || switching || suppressPosition || coverProcessing || !db) return;
+    const fromImport = $('importDialog').open;
+    const fromLibrary = $('libraryDialog').open;
+    const suggestedBook = typeof bookName === 'string' ? bookName :
+      fromImport ? $('bookName').value : fromLibrary ? $('bookSelect').value :
+      current?.book || readState('importBook', '');
+    const books = [...new Set(chapters.map(chapter => chapter.book))].sort(collator.compare);
+    const choices = $('newTXTBookSuggestions');
+    choices.replaceChildren();
+    for (const book of books) {
+      const item = document.createElement('option');
+      item.value = book;
+      choices.appendChild(item);
+    }
+    $('newTXTBook').value = suggestedBook || '';
+    $('newTXTName').value = '';
+    $('newTXTBody').value = '';
+    $('newTXTError').textContent = '';
+    newTXTInitial = newTXTCurrentDraft();
+    newTXTOrigin = fromImport ? 'import' : fromLibrary ? 'library' : '';
+    if (fromImport) closeDialog('importDialog');
+    if (fromLibrary) closeDialog('libraryDialog');
+    showDialog('newTXTDialog');
+    (suggestedBook ? $('newTXTName') : $('newTXTBook')).focus({ preventScroll: true });
+  }
+
+  function cancelNewTXT() {
+    if (busy) return;
+    if (newTXTHasUnsavedChanges() && !confirm('작성 중인 새 TXT를 저장하지 않고 닫을까요?')) return;
+    $('newTXTDialog').close();
+  }
+
+  async function createNewTXT() {
+    if (busy || editingReader || switching || suppressPosition || !db || !$('newTXTDialog').open) return;
+    const showError = message => { $('newTXTError').textContent = message; };
+    const rawBook = $('newTXTBook').value.trim().normalize('NFC');
+    const rawName = $('newTXTName').value.trim().normalize('NFC');
+    if (!rawBook || [...rawBook].length > 100 || /[\u0000-\u001f\u007f]/.test(rawBook)) {
+      showError('책 이름을 1~100자 이내로 입력해 주세요.');
+      return;
+    }
+    const previousBook = [...new Set(chapters.map(chapter => chapter.book))]
+      .find(book => book.normalize('NFC').toLocaleLowerCase('ko') === rawBook.toLocaleLowerCase('ko'));
+    const book = previousBook || rawBook;
+    const name = /\.txt$/i.test(rawName) ? rawName : rawName + '.txt';
+    if (!rawName || [...name].length > 200 || new TextEncoder().encode(name).length > 240 ||
+        /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(name) || name.startsWith('.') ||
+        /[. ]\.txt$/i.test(name) || name === '.' || name === '..') {
+      showError('TXT 이름에 사용할 수 없는 문자나 길이가 있습니다. 다른 이름을 입력해 주세요.');
+      return;
+    }
+    const id = chapterId(book, name);
+    if (inBook(book).some(item => item.name.normalize('NFC').toLocaleLowerCase('ko') === name.toLocaleLowerCase('ko'))) {
+      showError('이 책에 같은 이름의 TXT가 이미 있습니다. 기존 본문은 변경하지 않았습니다.');
+      return;
+    }
+    const text = $('newTXTBody').value.replace(/\r\n?/g, '\n');
+    if (text.includes('\u0000')) {
+      showError('본문에 사용할 수 없는 문자(NUL)가 포함되어 있습니다.');
+      return;
+    }
+    const bytes = new Blob([text]).size;
+    if (bytes > MAX_FILE_BYTES) {
+      showError('TXT 본문은 32 MB 이하로 작성해 주세요.');
+      return;
+    }
+    showError('새 TXT를 기기에 저장하는 중…');
+    setBusy(true);
+    let saved = false;
+    try {
+      // add/add in one transaction: a simultaneous tab cannot overwrite
+      // an existing chapter or its user-edited text.
+      await saveChapter({ id, book, name, bytes, encoding: 'utf-8', addedAt: Date.now() }, text);
+      saved = true;
+      await refreshChapters();
+      writeState('importBook', book);
+      newTXTInitial = null;
+      newTXTOrigin = '';
+      closeDialog('newTXTDialog');
+      renderBooks(book);
+      setBusy(false);
+      queueNASMissingUpload(book, true);
+      showToast('새 TXT를 저장했습니다. 직접 작성한 본문은 기기에 보관됩니다.');
+      await openChapter(id);
+    } catch (error) {
+      showError(saved
+        ? 'TXT는 저장됐지만 목록 갱신에 실패했습니다. 앱을 다시 열어 확인해 주세요. 저장 버튼을 반복해서 누르지 마세요.'
+        : error?.name === 'ConstraintError'
+          ? '다른 창에 같은 이름의 TXT가 있습니다. 기존 파일은 덮어쓰지 않았습니다.'
+          : explainError(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function decodeFile(file, requested) {
@@ -2185,6 +2298,21 @@
   $('openBtn').addEventListener('click', () => openImport());
   $('emptyImportBtn').addEventListener('click', () => openImport());
   $('pickFilesBtn').addEventListener('click', () => { $('fileInput').value = ''; $('fileInput').click(); });
+  $('newTXTFromImportBtn').addEventListener('click', () => openNewTXT());
+  $('newTXTInBookBtn').addEventListener('click', () => openNewTXT());
+  $('newTXTForm').addEventListener('submit', event => { event.preventDefault(); void createNewTXT(); });
+  $('newTXTCancel').addEventListener('click', cancelNewTXT);
+  $('newTXTCloseTop').addEventListener('click', cancelNewTXT);
+  $('newTXTDialog').addEventListener('cancel', event => {
+    if (busy || (newTXTHasUnsavedChanges() && !confirm('작성 중인 새 TXT를 저장하지 않고 닫을까요?'))) event.preventDefault();
+  });
+  $('newTXTDialog').addEventListener('close', () => {
+    const origin = newTXTOrigin;
+    newTXTOrigin = '';
+    newTXTInitial = null;
+    if (origin === 'import' && !busy) showDialog('importDialog');
+    else if (origin === 'library' && !busy) showDialog('libraryDialog');
+  });
   $('fileInput').addEventListener('change', () => { void importFiles(Array.from($('fileInput').files || [])); });
   $('prevBtn').addEventListener('click', () => { void goChapter(-1); });
   $('nextBtn').addEventListener('click', () => { void goChapter(1); });
@@ -2197,7 +2325,8 @@
   };
   if (window.HoyulComix) window.HoyulComix.actions = { openNovel: () => { window.HoyulComix.hide(); showHome(); }, notify: showToast };
   if (window.TextviewShelf) window.TextviewShelf.actions = {
-    openBook: showCoverPicker, manageBook: openLibrary, renameBook: openRenameBook, openImport: () => openImport(), openHelp,
+    openBook: showCoverPicker, manageBook: openLibrary, renameBook: openRenameBook, newTXT: openNewTXT,
+    openImport: () => openImport(), openHelp,
     showHome, notify: showToast
   };
   if (window.TextviewNAS) window.TextviewNAS.actions = { showHome, showShelf, importDownloaded, nasIdle, nasConnected, nasFolderLoaded, notify: showToast };
