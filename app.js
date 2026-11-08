@@ -243,7 +243,7 @@
     const model = window.TextviewEpisodeTitleModel;
     const credits = coverCredits(storedCover(book));
     const provider = model.providerForSource?.(credits.sourceName) || null;
-    return info && model.titleKey(info.title) === model.titleKey(book) && (!credits.author || model.authorKey(credits.author) === model.authorKey(info.author))
+    return info && model.sameEpisodeTitle(info.title, book, info.provider) && (!credits.author || model.authorKey(credits.author) === model.authorKey(info.author))
       && (!provider || provider === info.provider) ? info : null;
   }
 
@@ -254,10 +254,14 @@
 
   function displayChapterTitle(chapter, withNumber = false) {
     const named = window.TextviewEpisodeTitleModel?.namedFor(chapter.name);
-    if (named) return withNumber ? `${named.number}화 · ${named.title}` : named.title;
+    const model = window.TextviewEpisodeTitleModel;
+    if (named) return model?.descriptiveTitle(named.title)
+      ? (withNumber ? `${named.number}화 · ${named.title}` : named.title) : `${named.number}화`;
     const number = episodeNumber(chapter);
     const title = number && episodeInfo(chapter.book)?.titles.get(number);
-    return title ? (withNumber ? `${number}화 · ${title}` : title) : cleanName(chapter.name);
+    if (title && model?.descriptiveTitle(title)) return withNumber ? `${number}화 · ${title}` : title;
+    const name = cleanName(chapter.name);
+    return number && !model?.descriptiveTitle(name) ? `${number}화` : name;
   }
 
   async function updateEpisodeTitles(book, force = false) {
@@ -277,7 +281,7 @@
     }
     const model = bookModel(book);
     const saved = episodeInfo(book);
-    const cached = saved && window.TextviewEpisodeTitleModel.titleKey(saved.title) === window.TextviewEpisodeTitleModel.titleKey(book) &&
+    const cached = saved && window.TextviewEpisodeTitleModel.sameEpisodeTitle(saved.title, book, saved.provider) &&
       (!model.author || window.TextviewEpisodeTitleModel.authorKey(model.author) === window.TextviewEpisodeTitleModel.authorKey(saved.author)) ? saved : null;
     const fresh = cached && cached.checkedAt > Date.now() - 24 * 60 * 60 * 1000;
     if (!force && fresh && numbers.every(number => cached.titles.has(number) || cached.pages.includes(Math.floor((number - 1) / 30) + 1))) { queueNASNameSync(book); return; }
@@ -302,7 +306,7 @@
       for (const page of pages) {
         const result = await window.TextviewEpisodeTitles.getPage(target.productId, page, provider);
         if (!valid()) return;
-        if ((result.provider === undefined ? 'series' : result.provider) !== provider || window.TextviewEpisodeTitleModel.titleKey(result.title) !== window.TextviewEpisodeTitleModel.titleKey(book) ||
+        if ((result.provider === undefined ? 'series' : result.provider) !== provider || !window.TextviewEpisodeTitleModel.sameEpisodeTitle(result.title, book, provider) ||
             (model.author && window.TextviewEpisodeTitleModel.authorKey(model.author) !== window.TextviewEpisodeTitleModel.authorKey(result.author))) throw new Error('작품 정보가 일치하지 않아 회차 제목을 적용하지 않았습니다.');
         for (const number of titles.keys()) if (number > (page - 1) * 30 && number <= page * 30) titles.delete(number);
         for (const item of result.episodes) titles.set(item.number, item.title);
@@ -325,7 +329,11 @@
         }
       }
       episodeTitleRetryAfter.delete(book);
-      status({ message: added ? `회차 제목 ${added.toLocaleString('ko-KR')}개를 저장했습니다.` : '공개된 회차 제목이 없습니다.' });
+      status({ message: added
+        ? `실제 소제목 ${added.toLocaleString('ko-KR')}개를 저장했습니다. 숫자만 공개된 회차는 번호를 유지합니다.`
+        : provider === 'series'
+          ? '네이버 시리즈에 별도 회차 소제목이 공개되지 않아 기존 번호를 유지합니다.'
+          : '해당 연재처에 별도 회차 소제목이 공개되지 않아 기존 번호를 유지합니다.' });
     } catch (error) {
       episodeTitleRetryAfter.set(book, Date.now() + 5 * 60 * 1000);
       status({ error: (added ? `${added}개 제목을 저장했습니다. ` : '') + explainError(error) });

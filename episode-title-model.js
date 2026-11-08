@@ -3,6 +3,21 @@
   function titleKey(value) {
     return typeof value === 'string' ? value.normalize('NFC').replace(/\[(?:독점|완결|연재)\]/g, '').replace(/\s+/g, '').toLocaleLowerCase('ko').replace(/[.。]$/u, '') : '';
   }
+  // This Series label markets a combined main + extra-episode listing,
+  // not a different work. Never remove [단행본] or standalone [외전].
+  function seriesTitleKey(value) {
+    return titleKey(value).replace(/\[외전독점\]$/u, '');
+  }
+  function sameEpisodeTitle(first, second, provider = 'series') {
+    const normalize = provider === 'series' ? seriesTitleKey : titleKey;
+    const key = normalize(first);
+    return !!key && key === normalize(second);
+  }
+  function descriptiveTitle(value) {
+    if (typeof value !== 'string') return false;
+    const title = value.normalize('NFC').trim();
+    return title.length > 0 && !/^(?:제\s*)?0*[0-9]{1,6}\s*(?:화|회)?\.?$/u.test(title);
+  }
   function authorKey(value) {
     return typeof value === 'string' ? value.normalize('NFC').replace(/\s+/g, '').toLocaleLowerCase('ko') : '';
   }
@@ -51,11 +66,12 @@
       if (!item || !Number.isSafeInteger(item.number) || item.number < 1 || item.number > 10000 || seen.has(item.number) ||
           !text(item.title) || !item.title.trim()) return null;
       seen.add(item.number);
+      if (!descriptiveTitle(item.title)) continue;
       episodes.push({ number: item.number, title: item.title.trim() });
     }
     episodes.sort((a, b) => a.number - b.number);
     const provider = value.provider || 'series';
     return { provider, productId: value.productId, title: value.title.trim(), author: value.author.trim(), episodes, pages: [...(value.pages || [])].sort((a, b) => a - b), checkedAt: value.checkedAt };
   }
-  window.TextviewEpisodeTitleModel = { numberFor, namedFor, normalize, titleKey, authorKey, providerForSource };
+  window.TextviewEpisodeTitleModel = { numberFor, namedFor, normalize, titleKey, seriesTitleKey, sameEpisodeTitle, descriptiveTitle, authorKey, providerForSource };
 })();

@@ -31,6 +31,8 @@
     return normalizedText(value.replace(/\[(?:독점|완결|연재)\]/g, '')).replace(/[.。]$/u, '');
   }
 
+  function seriesTitleKey(value) { return normalizedTitle(value).replace(/\[외전독점\]$/u, ''); }
+
   async function fetchTimed(url, options = {}) {
     if (navigator.onLine === false) throw new Error('회차 제목을 가져오려면 인터넷에 연결해 주세요.');
     try {
@@ -109,17 +111,21 @@
     const preferred = ['노벨피아', 'novelpia'].includes(sourceName) ? 'novelpia'
       : ['네이버시리즈', 'naverseries', 'series'].includes(sourceName) ? 'series' : null;
     for (const provider of preferred ? [preferred] : ['series', 'novelpia']) {
-      const matches = new Map();
+      const exactMatches = new Map(), aliasMatches = new Map();
       for (const row of rows) {
         const id = /^(series|novelpia):([1-9][0-9]{0,11})$/.exec(typeof row?.id === 'string' ? row.id : '');
         if (!id || id[1] !== provider || !validText(row.title) || !validText(row.author ?? '', true)
-            || normalizedTitle(row.title) !== normalizedTitle(title)
             || (author && normalizedText(row.author || '') !== normalizedText(author))) continue;
+        const exact = normalizedTitle(row.title) === normalizedTitle(title);
+        const alias = provider === 'series' && seriesTitleKey(row.title) === seriesTitleKey(title);
+        if (!exact && !alias) continue;
         const selected = { provider, productId: id[2], title: row.title.trim(), author: (row.author || '').trim(), sourceName: provider === 'series' ? '네이버 시리즈' : '노벨피아' };
+        const matches = exact ? exactMatches : aliasMatches;
         const key = provider + ':' + id[2], previous = matches.get(key);
         if (previous && normalizedText(previous.author) !== normalizedText(selected.author)) throw new Error('작가 정보가 일치하지 않아 회차 제목을 연결하지 않았습니다.');
         matches.set(key, selected);
       }
+      const matches = exactMatches.size ? exactMatches : aliasMatches;
       if (matches.size > 1) throw new Error('같은 제목의 작품이 여러 개라 회차 제목을 자동으로 연결하지 않았습니다.');
       if (matches.size) return matches.values().next().value;
     }
@@ -143,7 +149,9 @@
       lastNumber = item.number;
       return { number: item.number, title: item.title.trim() };
     });
-    return { provider, productId, page, total: data.total, title: data.title.trim(), author: data.author.trim(), hasMore: data.hasMore, episodes };
+    const descriptive = window.TextviewEpisodeTitleModel?.descriptiveTitle;
+    return { provider, productId, page, total: data.total, title: data.title.trim(), author: data.author.trim(), hasMore: data.hasMore,
+      episodes: typeof descriptive === 'function' ? episodes.filter(item => descriptive(item.title)) : episodes };
   }
 
   window.TextviewEpisodeTitles = { resolveBook, getPage };
