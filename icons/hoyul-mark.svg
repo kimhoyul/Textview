@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1000 1000" role="img" aria-label="호율 시리즈">
+  <rect width="1000" height="1000" fill="#C5ACEE"/>
+  <!-- Upright square stems. Only the middle bar rises to the right by 20 degrees. -->
+  <path fill="#111214" d="M220 200H400V470.3970234266202L600 397.6029765733798V200H780V800H600V529.6029765733798L400 602.3970234266202V800H220Z"/>
+</svg>

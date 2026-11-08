@@ -1,0 +1,361 @@
+/* NAS follows the approved login and file-list screens. */
+body.nas-visible {
+  --bg: #38383a;
+  --panel: #454547;
+  --text: #f5f5f7;
+  --muted: #a0a0a6;
+  --border: rgba(255,255,255,.13);
+  --accent: #c5a4f3;
+  color-scheme: dark;
+  background: #38383a;
+  color: #f5f5f7;
+}
+body.nas-visible:has(.nas-screen[data-view="browser"]) { background: #000; }
+body.nas-visible > .topbar,
+body.nas-visible > .reader-shell,
+body.nas-visible > .bottombar,
+body.nas-visible > #showControls,
+body.nas-visible > #homeScreen,
+body.nas-visible > #bookshelfScreen { display: none !important; }
+
+.nas-screen {
+  --nas-bg: #38383a;
+  --nas-surface: #454547;
+  --nas-text: #f5f5f7;
+  --nas-muted: #a0a0a6;
+  --nas-line: #2c2c2f;
+  --nas-accent: #c5a4f3;
+  --nas-row-inset: 132px;
+  position: relative;
+  width: 100%;
+  max-width: 780px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0 auto;
+  background: var(--nas-bg);
+  color: var(--nas-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+  font-size: 16px;
+  letter-spacing: -.025em;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+.nas-screen[data-view="browser"] { --nas-bg: #000; background: #000; }
+.nas-screen[hidden], .nas-screen [hidden] { display: none !important; }
+.nas-screen *, .nas-screen *::before, .nas-screen *::after { box-sizing: border-box; }
+.nas-screen h1, .nas-screen h2, .nas-screen h3, .nas-screen p { margin: 0; }
+.nas-screen button {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-appearance: none;
+}
+.nas-screen button:active { transform: none; opacity: .72; }
+.nas-screen button:disabled { opacity: .4; cursor: default; }
+.nas-screen button:focus-visible, .nas-screen input:focus-visible { outline: 2px solid var(--nas-accent); outline-offset: 3px; }
+.nas-screen svg { width: 24px; height: 24px; flex-shrink: 0; vertical-align: middle; }
+.nas-screen input[type="text"], .nas-screen input[type="password"], .nas-screen input[type="search"] {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 54px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 10px;
+  background: var(--nas-surface);
+  color: var(--nas-text);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1.3;
+  -webkit-appearance: none;
+}
+.nas-screen input::placeholder { color: #aaa9af; opacity: 1; }
+.nas-screen input:disabled { opacity: .5; }
+.nas-screen input[type="search"]::-webkit-search-cancel-button { display: none; }
+.nas-screen .nas-sr-only, .nas-screen .nas-visually-hidden, .nas-screen .nas-credentials > .nas-field-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Auth: a back arrow, a wordmark, and one quiet form. */
+.nas-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  padding-top: max(12px, env(safe-area-inset-top));
+  background: var(--nas-bg);
+}
+.nas-toprow {
+  display: grid;
+  grid-template-columns: minmax(64px,1fr) minmax(0,2fr) minmax(64px,1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+}
+.nas-screen .nas-icon-button, .nas-screen .nas-back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+}
+.nas-screen .nas-back-button { justify-self: start; }
+.nas-screen .nas-back-button svg { width: 27px; height: 27px; }
+.nas-screen[data-view="login"] .nas-toprow, .nas-screen[data-view="approval"] .nas-toprow { display: flex; }
+.nas-screen[data-view="login"] .nas-back-button, .nas-screen[data-view="approval"] .nas-back-button { margin-left: -3px; }
+.nas-screen[data-view="login"] #nasTitle, .nas-screen[data-view="approval"] #nasTitle { display: none; }
+.nas-login {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 430px;
+  min-height: calc(100vh - 68px - env(safe-area-inset-top));
+  min-height: calc(100dvh - 68px - env(safe-area-inset-top));
+  margin: 0 auto;
+  padding: 48px max(24px, env(safe-area-inset-right)) calc(48px + env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+}
+.nas-login .nas-wordmark {
+  display: block;
+  margin: 12px 0 40px;
+  color: var(--nas-accent);
+  font-size: clamp(34px,9vw,38px);
+  font-weight: 900;
+  line-height: 1.1;
+  letter-spacing: -.025em;
+  text-align: center;
+}
+.nas-login form { width: 100%; margin: 0; }
+.nas-credentials { position: relative; overflow: hidden; border: 1px solid #5d5d60; border-radius: 10px; background: #454547; }
+.nas-screen .nas-credentials input { height: 68px; min-height: 68px; padding: 18px 16px; border: 0; border-radius: 0; background: transparent; font-size: 18px; }
+.nas-screen .nas-credentials #nasPassword { border-top: 1px solid #5a5a5d; }
+.nas-screen .nas-credentials input:focus-visible { outline-offset: -3px; }
+.nas-screen .nas-primary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 54px;
+  padding: 13px 16px;
+  border: 1px solid rgba(255,255,255,.13);
+  border-radius: 10px;
+  background: var(--nas-accent);
+  color: #170e25;
+  font-size: 19px;
+  line-height: 1.35;
+  font-weight: 700;
+}
+.nas-login .nas-primary-button { margin-top: 24px; }
+.nas-auth-modes { margin-top: 12px; }
+.nas-screen .nas-auth-modes button, .nas-screen .nas-secondary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 54px;
+  padding: 13px 16px;
+  border-radius: 10px;
+  background: #48484b;
+  color: #f7f7fa;
+  font-size: 17px;
+  line-height: 1.35;
+  font-weight: 650;
+}
+.nas-auth-modes button svg, .nas-secondary-button svg { width: 23px; height: 23px; }
+.nas-field-label { display: block; margin: 18px 0 8px; color: #d8d8dd; font-size: 15px; }
+.nas-screen #nasOtpField { margin-top: 18px; }
+.nas-screen #nasOtpField .nas-field-label { margin: 0 0 8px; }
+.nas-screen #nasOtp { font-size: 20px; letter-spacing: .14em; font-variant-numeric: tabular-nums; }
+.nas-login-note { margin-top: 18px !important; color: #a9a9af; font-size: 14px; line-height: 1.6; text-align: center; }
+.nas-screen .nas-retry-button { align-self: center; min-height: 44px; margin-top: 12px; color: var(--nas-accent); font-size: 15px; text-decoration: underline; text-underline-offset: 3px; }
+.nas-login .nas-login-footer { margin-top: auto; padding-top: 70px; color: #848487; font-size: 20px; font-weight: 850; line-height: 1.1; letter-spacing: -.02em; text-align: center; }
+
+/* Approval stays in the same auth layout. */
+.nas-approval-panel { width: 100%; }
+.nas-approval-card { overflow: hidden; border: 1px solid #5d5d60; border-radius: 10px; background: #454547; }
+.nas-approval-topline { display: flex; align-items: center; gap: 12px; min-height: 66px; padding: 17px 16px; }
+.nas-approval-topline h3, .nas-approval-status { font-size: 16px; line-height: 1.4; font-weight: 500; }
+.nas-approval-countdown { margin-left: auto; color: #aaa9b0; font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nas-approval-spinner { display: block; width: 25px; height: 25px; flex: 0 0 25px; border: 3px dotted var(--nas-accent); border-radius: 50%; animation: nas-spin 1.8s linear infinite; }
+.nas-approval-instruction { min-height: 66px; padding: 21px 16px; border-top: 1px solid #5a5a5d; color: #eeeef2; font-size: 16px; line-height: 1.55; }
+.nas-approval-panel .nas-approval-followup { margin-top: 18px; color: #a9a9af; font-size: 14px; line-height: 1.6; text-align: center; }
+.nas-verify-number { padding: 16px; border-top: 1px solid #5a5a5d; text-align: center; }
+.nas-verify-number span { display: block; color: #b9b9c0; font-size: 14px; line-height: 1.5; }
+.nas-verify-number strong { display: block; margin-top: 8px; color: var(--nas-accent); font-size: 36px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.nas-screen .nas-approval-cancel { width: 100%; min-height: 54px; margin-top: 30px; border-radius: 10px; background: #737376; color: #f7f7fa; font-size: 17px; font-weight: 650; }
+
+/* File browser: black canvas and inset dividers, without cards. */
+.nas-screen[data-view="browser"] .nas-header { padding-bottom: 12px; background: #000; }
+.nas-screen[data-view="browser"] .nas-back-button { width: 50px; height: 50px; border: 1px solid #333336; border-radius: 50%; background: #151516; }
+.nas-screen #nasTitle { overflow: hidden; font-size: 18px; font-weight: 600; line-height: 1.4; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.nas-screen .nas-select-mode-pill, .nas-screen .nas-select-all-button { display: inline-flex; align-items: center; justify-content: center; width: auto; min-width: 70px; min-height: 48px; padding: 0 17px; border: 1px solid #333336; border-radius: 30px; background: #151516; color: #f5f5f7; font-size: 16px; line-height: 1.3; white-space: nowrap; }
+.nas-screen .nas-select-mode-pill, .nas-screen .nas-selection-done { justify-self: end; }
+.nas-screen .nas-select-all-button { min-width: 96px; padding: 0 14px; justify-self: start; }
+.nas-screen .nas-selection-done { display: inline-flex; align-items: center; justify-content: center; width: 52px; min-width: 52px; height: 52px; border: 1px solid #d4b8fa; border-radius: 50%; background: var(--nas-accent); color: #fff; }
+.nas-selection-done svg { width: 30px; height: 30px; stroke-width: 2.1; }
+.nas-screen.is-selecting .nas-toprow { grid-template-columns: 100px minmax(0,1fr) 56px; }
+.nas-screen.is-selecting #nasTitle { font-size: 17px; }
+.nas-search { display: flex; align-items: center; gap: 10px; min-height: 52px; margin: 12px max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left)); padding: 0 15px; border-radius: 30px; background: #141416; color: #76767e; }
+.nas-search > svg { width: 22px; height: 22px; }
+.nas-screen .nas-search input { min-height: 52px; padding: 11px 0; border: 0; border-radius: 0; background: transparent; font-size: 17px; }
+.nas-search input::placeholder { color: #83838b; }
+.nas-search input:focus-visible { outline-offset: -3px; }
+.nas-screen #nasSearchClear { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: 0 0 44px; margin-right: -10px; color: #9b9ba3; }
+.nas-screen #nasSearchClear svg { width: 19px; height: 19px; }
+.nas-browser { padding: 8px 0 calc(114px + env(safe-area-inset-bottom)); }
+.nas-screen .nas-breadcrumbs { display: none; }
+.nas-screen .nas-file-row { position: relative; display: flex; align-items: center; gap: 20px; width: 100%; min-height: 80px; margin: 0; padding: 12px max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left)); border: 0; border-radius: 0; background: transparent; color: var(--nas-text); text-align: left; }
+.nas-file-row::after { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: 0; left: var(--nas-row-inset); height: 1px; background: var(--nas-line); content: ""; }
+.nas-screen .nas-file-row.is-selected { background: #38383a; }
+.nas-screen .nas-file-row.is-selected::after { background: #555558; }
+.nas-file-row.is-unavailable { color: #77777e; }
+.nas-file-arrow { display: flex; align-items: center; justify-content: center; width: 20px; height: 44px; flex: 0 0 20px; color: var(--nas-accent); }
+.nas-file-arrow svg { width: 18px; height: 22px; stroke-width: 2.5; }
+.nas-file-icon { display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; flex: 0 0 56px; color: var(--nas-accent); }
+.nas-folder-row .nas-file-icon { position: relative; }
+.nas-folder-row .nas-file-icon::before {
+  position: absolute;
+  inset: 5px 0 5px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #e5ccff 0, #c6a7ed 22%, #b799dd 100%);
+  clip-path: polygon(0 0, 32% 0, 44% 15%, 100% 15%, 100% 100%, 0 100%);
+  content: "";
+}
+.nas-folder-row .nas-file-icon::after {
+  position: absolute;
+  inset: 15px 0 5px;
+  border: 1px solid #dbbffc;
+  border-top-color: #f0dfff;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #d6b7f8 0, #c2a0eb 45%, #b795e4 100%);
+  box-shadow: 0 -2px 0 rgba(255,255,255,.23);
+  content: "";
+}
+.nas-folder-row .nas-file-icon svg { display: none; }
+.nas-file-icon svg { width: 64px; height: 64px; }
+.nas-folder-fill { stroke: #d5b9f6; stroke-width: .6; }
+.nas-folder-tab { stroke: #eedbff; stroke-width: 1.1; }
+.nas-txt-row .nas-file-icon { color: #f3f3f5; }
+.nas-paper-fill { stroke: #dedee2; stroke-width: .6; }
+.nas-paper-fold { stroke: #c1c1c8; stroke-width: .7; }
+.nas-file-copy { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 5px; }
+.nas-file-name { overflow: hidden; font-size: 18px; font-weight: 400; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.nas-file-meta { overflow: hidden; color: #9999a1; font-size: 14px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.nas-file-check { position: relative; display: flex; align-items: center; justify-content: center; width: 44px; min-width: 44px; height: 44px; flex: 0 0 44px; }
+.nas-file-check input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
+.nas-check-circle { display: flex; align-items: center; justify-content: center; width: 29px; height: 29px; border: 2px solid #5a5a61; border-radius: 50%; background: transparent; color: transparent; }
+.nas-check-circle svg { width: 19px; height: 19px; stroke-width: 2.5; }
+.nas-file-check input:checked + .nas-check-circle, .nas-file-row.is-selected .nas-check-circle { border-color: var(--nas-accent); background: var(--nas-accent); color: #fff; }
+.nas-file-check input:focus-visible + .nas-check-circle { outline: 2px solid #e2cbff; outline-offset: 3px; }
+.nas-screen.is-selecting .nas-file-row { --nas-row-inset: 154px; gap: 22px; }
+.nas-screen.is-selecting .nas-file-icon { width: 50px; flex-basis: 50px; }
+.nas-screen.is-selecting .nas-folder-row .nas-file-arrow { display: none; }
+.nas-empty { padding: 42px 24px; color: #9999a1; font-size: 16px; line-height: 1.6; text-align: center; }
+.nas-loading { padding: 28px 20px; color: #b3a0cd; font-size: 15px; line-height: 1.5; text-align: center; }
+.nas-screen .nas-more-button { display: flex; align-items: center; justify-content: center; gap: 6px; width: calc(100% - 32px); min-height: 48px; margin: 18px 16px; border: 1px solid #333336; border-radius: 28px; background: #151516; color: #cbc1db; font-size: 15px; }
+.nas-more-button svg { width: 17px; height: 17px; }
+
+/* The editable book name and progress live in the import sheet. */
+.nas-import-dock { position: fixed; z-index: 45; right: 0; bottom: calc(20px + env(safe-area-inset-bottom)); left: 0; width: 100%; max-width: 780px; margin: 0 auto; padding: 0 max(24px, env(safe-area-inset-right)) 0 max(24px, env(safe-area-inset-left)); pointer-events: none; }
+.nas-screen .nas-import-capsule { display: flex; align-items: center; justify-content: center; gap: 14px; width: 100%; min-height: 68px; padding: 14px 20px; border: 1px solid #3b3b3f; border-radius: 40px; background: rgba(22,22,24,.97); box-shadow: 0 4px 24px rgba(0,0,0,.3); color: #f5f5f7; font-size: 18px; line-height: 1.35; font-weight: 500; pointer-events: auto; }
+.nas-import-capsule svg { width: 34px; height: 34px; color: var(--nas-accent); stroke-width: 1.9; }
+.nas-location-dock { position: fixed; z-index: 45; right: 0; bottom: calc(20px + env(safe-area-inset-bottom)); left: 0; width: 100%; max-width: 780px; margin: 0 auto; padding: 0 max(24px, env(safe-area-inset-right)) 0 max(24px, env(safe-area-inset-left)); pointer-events: none; }
+.nas-screen .nas-location-pill { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 44px; padding: 10px 18px; border: 1px solid #3b3b3f; border-radius: 30px; background: #151517; color: #f5f5f7; font-size: 15px; line-height: 1.4; font-weight: 450; pointer-events: auto; }
+.nas-location-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nas-location-layer { position: fixed; z-index: 69; inset: 0; }
+.nas-screen .nas-location-backdrop { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 0; background: rgba(0,0,0,.4); }
+.nas-screen .nas-location-backdrop:active, .nas-screen .nas-location-backdrop:disabled { opacity: 1; }
+.nas-location-menu { position: absolute; z-index: 70; right: 0; bottom: calc(80px + env(safe-area-inset-bottom)); left: 0; width: calc(100% - 48px); max-width: 430px; max-height: min(65dvh,480px); overflow-y: auto; margin: 0 auto; padding: 10px 14px 12px; border: 1px solid #424246; border-radius: 20px; background: #202023; box-shadow: 0 10px 40px rgba(0,0,0,.4); overscroll-behavior: contain; }
+.nas-location-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 0 5px; }
+.nas-location-menu-head h2 { overflow: hidden; font-size: 18px; line-height: 1.4; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.nas-screen #nasLocationClose { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin-right: -7px; color: #b7b7bf; }
+.nas-location-menu .nas-breadcrumbs { display: flex; flex-direction: column; gap: 1px; padding: 7px 0; }
+.nas-location-menu .nas-breadcrumb-separator { display: none; }
+.nas-screen .nas-location-menu .nas-breadcrumb { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 9px 8px; color: #e6e6ec; font-size: 16px; line-height: 1.5; text-align: left; overflow-wrap: anywhere; }
+.nas-location-menu .nas-breadcrumb::after { color: #7d7d87; font-size: 22px; line-height: 1; content: "›"; }
+.nas-screen .nas-location-menu .nas-breadcrumb[aria-current] { color: var(--nas-accent); font-weight: 600; }
+.nas-screen .nas-location-menu #nasLogout { display: flex; align-items: center; width: 100%; min-height: 48px; margin-top: 4px; padding: 10px 8px; border-top: 1px solid #3b3b41; color: #d8c4ef; font-size: 16px; text-align: left; }
+body.nas-visible.nas-sheet-open { overflow: hidden; }
+.nas-sheet { position: fixed; z-index: 69; inset: 0; }
+.nas-screen .nas-sheet-backdrop { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 0; background: rgba(0,0,0,.62); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
+.nas-screen .nas-sheet-backdrop:active { opacity: 1; }
+.nas-screen .nas-sheet-backdrop:disabled { opacity: 1; }
+.nas-download-panel {
+  position: absolute;
+  z-index: 70;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  max-width: 560px;
+  max-height: calc(100dvh - max(24px, env(safe-area-inset-top)));
+  overflow-y: auto;
+  margin: 0 auto;
+  padding: 10px max(24px, env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+  border: 1px solid #424246;
+  border-bottom: 0;
+  border-radius: 24px 24px 0 0;
+  background: #222225;
+  overscroll-behavior: contain;
+}
+.nas-sheet-handle { display: block; width: 36px; height: 5px; margin: 0 auto 8px; border-radius: 3px; background: #626267; }
+.nas-sheet-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; margin-bottom: 10px; }
+.nas-sheet-header h2 { font-size: 21px; font-weight: 650; line-height: 1.4; }
+.nas-screen #nasImportClose { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin-right: -7px; color: #b8b8c0; }
+.nas-screen #nasImportClose svg { width: 22px; height: 22px; }
+.nas-book-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 9px; font-size: 15px; line-height: 1.4; }
+.nas-book-label label { color: #dddde3; }
+.nas-book-label span { color: #aaa0bb; font-size: 14px; font-variant-numeric: tabular-nums; }
+.nas-download-panel input[type="text"] { min-height: 54px; border-color: #515157; background: #353538; font-size: 17px; }
+.nas-download-panel .nas-download-button { margin-top: 20px; font-size: 17px; }
+.nas-download-button svg { width: 23px; height: 23px; }
+.nas-transfer-progress { margin-top: 16px; }
+.nas-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
+.nas-progress-heading span { color: #e0c8fc; font-size: 15px; }
+.nas-screen .nas-progress-heading button { min-width: 44px; min-height: 44px; color: #d7d2df; font-size: 15px; }
+.nas-transfer-progress progress { display: block; width: 100%; height: 5px; overflow: hidden; border: 0; border-radius: 4px; background: #47474e; accent-color: var(--nas-accent); }
+.nas-transfer-progress progress::-webkit-progress-bar { background: #47474e; }
+.nas-transfer-progress progress::-webkit-progress-value { background: var(--nas-accent); }
+.nas-transfer-progress progress::-moz-progress-bar { background: var(--nas-accent); }
+.nas-transfer-progress p { overflow: hidden; margin-top: 9px; color: #aaaab4; font-size: 14px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.nas-message { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 24px 0; padding: 12px 14px; border: 1px solid #6a5a7a; border-radius: 10px; background: #403948; color: #e7d6fa; font-size: 14px; line-height: 1.5; }
+.nas-message p { min-width: 0; overflow-wrap: anywhere; }
+.nas-message-error { border-color: #8a6970; background: #483a3f; color: #ffd6dd; }
+.nas-message-success { border-color: #6d587e; }
+.nas-screen[data-view="browser"] .nas-message { margin-right: 16px; margin-left: 16px; background: #24202b; }
+.nas-message button { flex: 0 0 auto; color: #e7d4ff; font-size: 14px; white-space: nowrap; }
+.nas-message button svg { width: 14px; height: 14px; }
+
+@keyframes nas-spin { to { transform: rotate(360deg); } }
+@media (max-width: 374px) {
+  .nas-toprow { padding-right: max(12px, env(safe-area-inset-right)); padding-left: max(12px, env(safe-area-inset-left)); gap: 5px; }
+  .nas-login { padding-right: 20px; padding-left: 20px; }
+  .nas-login .nas-wordmark { font-size: 33px; }
+  .nas-screen.is-selecting .nas-toprow { grid-template-columns: 92px minmax(0,1fr) 52px; }
+  .nas-screen .nas-select-all-button { min-width: 90px; padding: 0 12px; font-size: 15px; }
+  .nas-file-name { font-size: 17px; }
+  .nas-file-meta { font-size: 13px; }
+  .nas-screen .nas-file-row { gap: 12px; --nas-row-inset: 116px; }
+  .nas-screen.is-selecting .nas-file-row { gap: 15px; --nas-row-inset: 140px; }
+  .nas-screen .nas-import-capsule { gap: 10px; padding: 14px 16px; font-size: 17px; }
+}
+@media (min-width: 600px) {
+  .nas-screen[data-view="browser"] .nas-file-name { font-size: 19px; }
+  .nas-import-dock, .nas-location-dock { max-width: 500px; }
+}
+@media (prefers-reduced-motion: reduce) { .nas-approval-spinner { animation: none; } }

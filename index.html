@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111214" id="themeColor">
+  <meta name="color-scheme" content="light dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="호율 시리즈">
+  <meta name="description" content="소설 TXT와 만화 이미지를 기기에 보관하고 인터넷 없이 읽는 호율 시리즈">
+  <meta name="app-version" content="2.12.2">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/hoyul-flat-apple-touch.png">
+  <link rel="icon" type="image/png" href="./icons/hoyul-flat-192.png">
+  <link rel="preload" href="./fonts/NanumMyeongjo-Regular.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./home.css">
+  <link rel="stylesheet" href="./bookshelf.css">
+  <link rel="stylesheet" href="./book-detail.css">
+  <link rel="stylesheet" href="./cover-picker.css">
+  <link rel="stylesheet" href="./reader.css">
+  <link rel="stylesheet" href="./nas.css">
+  <link rel="stylesheet" href="./comic.css">
+  <link rel="stylesheet" href="./comic-reader.css">
+  <script src="./home-ui.js" defer></script>
+  <script src="./bookshelf-ui.js" defer></script>
+  <script src="./book-detail-ui.js" defer></script>
+  <script src="./cover-picker-ui.js" defer></script>
+  <script src="./cover-image.js" defer></script>
+  <script src="./cover-search.js" defer></script>
+  <script src="./episode-title-model.js" defer></script>
+  <script src="./episode-titles.js" defer></script>
+  <script src="./reader-controls.js" defer></script>
+  <script src="./reader-layout.js" defer></script>
+  <script src="./nas-ui.js" defer></script>
+  <script src="./comic-store.js" defer></script>
+  <script src="./comic-reader.js" defer></script>
+  <script src="./comic-ui.js" defer></script>
+  <script src="./app.js" defer></script>
+  <title>호율 시리즈</title>
+  <style>
+    body.reading .topbar { position: fixed; left: 0; right: 0; top: 0; }
+    body.reading .topbar, body.reading .bottombar { transition: transform .2s ease, visibility .2s; }
+    body.reading:not(.show-topbar) .topbar { transform: translateY(calc(-100% - 10px)); visibility: hidden; pointer-events: none; }
+    body.reading:not(.show-bottombar) .bottombar { transform: translateY(calc(100% + 10px)); visibility: hidden; pointer-events: none; }
+    body.reading .reader-shell { min-height: 100vh; min-height: 100dvh; padding-top: 0; padding-bottom: max(28px, env(safe-area-inset-bottom)); touch-action: manipulation; }
+    .nav { grid-template-columns: minmax(0, 1fr) minmax(100px, 1.25fr) minmax(0, 1fr); }
+    .nav > button { min-width: 0; padding: 8px 6px; font-size: 14px; }
+    #chapterJumpBtn { min-height: 52px; }
+    #chapterJumpBtn strong { display: flex; justify-content: center; align-items: center; gap: 4px; }
+    #currentChapterLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #chapterJumpBtn .progress-details { display: block; margin-top: 3px; font-size: 11px; white-space: nowrap; }
+    #showControls { position: fixed; top: -160px; left: 12px; z-index: 80; }
+    #showControls:focus { top: max(12px, env(safe-area-inset-top)); }
+    html.reader-editing-root, body.reader-editing { height: 100%; overflow: hidden; overscroll-behavior: none; }
+    body.reader-editing > :not(.reader-shell) { display: none !important; }
+    body.reader-editing .reader-viewport,
+    body.reader-editing #notice, body.reader-editing #empty { display: none !important; }
+    #readerEditor[hidden] { display: none !important; }
+    #readerEditor {
+      position: fixed; z-index: 90; top: var(--editor-top, 0px); left: 50%;
+      display: flex; flex-direction: column; width: min(100%, var(--reader-width, 760px));
+      height: var(--editor-height, 100dvh); min-height: 0; transform: translateX(-50%);
+      background: var(--bg); color: var(--text);
+    }
+    .reader-editor-header {
+      display: grid; grid-template-columns: 72px minmax(0, 1fr) 72px; align-items: center; gap: 8px;
+      flex: 0 0 auto; min-height: 58px; padding: max(8px, env(safe-area-inset-top))
+        max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+      border-bottom: 1px solid var(--reader-control-border); background: var(--reader-control-bg);
+    }
+    .reader-editor-tools {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 10px;
+      flex: 0 0 auto; padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+      border-bottom: 1px solid var(--reader-control-border); background: var(--reader-control-bg);
+    }
+    #readerEditor #editSelectAll {
+      min-height: 44px; padding: 9px 12px; border: 1px solid var(--reader-control-accent);
+      border-radius: 9px; background: transparent; color: var(--reader-control-accent);
+      font-size: 13px; font-weight: 650;
+    }
+    #readerEditor #editSelectAll:disabled { opacity: .45; }
+    .reader-editor-tools-note { color: var(--reader-control-muted); font-size: 11px; }
+    .reader-editor-heading { min-width: 0; text-align: center; }
+    #editTitle { margin: 0; font-size: 16px; line-height: 1.4; }
+    #editMeta { margin: 3px 0 0; color: var(--reader-control-muted); font-size: 11px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #readerEditor .reader-editor-header button { min-height: 44px; margin: 0; padding: 8px 12px; border: 0; background: transparent; color: var(--reader-control-text); font-size: 16px; }
+    #readerEditor #editSave { background: var(--reader-control-accent); color: #211729; font-weight: 700; border-radius: 9px; }
+    #editText {
+      display: block; flex: 1 1 0; min-height: 0; width: 100%; margin: 0; resize: none;
+      padding: var(--reader-vertical-padding, 12px) max(var(--reader-padding, 12px), env(safe-area-inset-right))
+        max(var(--reader-vertical-padding, 12px), env(safe-area-inset-bottom)) max(var(--reader-padding, 12px), env(safe-area-inset-left));
+      border: 0; border-radius: 0; outline: none; background: var(--bg); color: var(--text);
+      font-family: "Nanum Myeongjo", "AppleMyungjo", "Batang", serif;
+      font-size: max(16px, var(--font-size, 20px)); line-height: var(--line-height, 1.9); font-weight: 400;
+      white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere; caret-color: var(--reader-control-accent);
+      overflow-y: auto; overscroll-behavior: contain; -webkit-appearance: none; -webkit-overflow-scrolling: touch;
+    }
+    #readerEditor[data-wrap="character"] #editText { word-break: break-all; }
+    #editError { flex: 0 0 auto; margin: 0; padding: 10px 16px max(10px, env(safe-area-inset-bottom)); color: var(--reader-control-text); background: var(--reader-control-bg); font-size: 13px; line-height: 1.6; }
+    #editError:empty { display: none; }
+    @media (prefers-reduced-motion: reduce) { body.reading .topbar, body.reading .bottombar { transition: none; } }
+  </style>
+</head>
+<body>
+  <button id="showControls" type="button" aria-expanded="false">읽기 메뉴 표시</button>
+  <header class="topbar">
+    <div class="toprow">
+      <div class="title-wrap">
+        <div class="title" id="title">호율 시리즈</div>
+        <div class="subtitle" id="subtitle">내 책장</div>
+      </div>
+      <button id="openBtn" type="button" disabled>TXT 추가</button>
+      <button id="chaptersBtn" type="button" disabled>책장</button>
+    </div>
+    <div class="toolbar" aria-label="읽기 설정">
+      <button id="homeBtn" type="button">홈</button>
+      <button id="editBtn" type="button" disabled>편집</button>
+      <button id="fontDownBtn" type="button" aria-label="글자 크기 줄이기">A−</button>
+      <button id="fontUpBtn" type="button" aria-label="글자 크기 키우기">A+</button>
+      <button id="lineBtn" type="button">줄간격</button>
+      <button id="paddingBtn" type="button">여백</button>
+      <button id="themeBtn" type="button">다크</button>
+      <button id="topBtn" type="button">맨 위</button>
+      <button id="helpBtn" type="button">관리</button>
+    </div>
+    <button id="offlineStatus" type="button" hidden aria-hidden="true"></button>
+  </header>
+  <main class="reader-shell">
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div id="empty" class="empty">
+      <div>
+        <span class="eyebrow">나만의 작은 책장</span>
+        <strong>읽을 TXT를 가져오세요.</strong>
+        <button class="primary" id="emptyImportBtn" type="button" disabled>TXT 가져오기</button>
+      </div>
+    </div>
+    <article id="reader" aria-label="텍스트 본문" hidden></article>
+  </main>
+  <footer class="bottombar">
+    <div class="nav">
+      <button id="prevBtn" type="button" disabled>← 이전 화</button>
+      <button id="chapterJumpBtn" class="progress" type="button" aria-haspopup="dialog" aria-controls="libraryDialog" aria-label="원하는 화로 이동" disabled>
+        <strong><span id="currentChapterLabel">화 선택</span><span aria-hidden="true">▾</span></strong>
+        <span class="progress-details"><span id="chapterProgress">- / -</span> · <span id="scrollProgress">0%</span></span>
+      </button>
+      <button id="nextBtn" type="button" disabled>다음 화 →</button>
+    </div>
+  </footer>
+  <dialog id="importDialog" aria-labelledby="importTitle">
+    <div class="dialog-head"><h2 id="importTitle">TXT 가져오기</h2><button type="button" data-close>닫기</button></div>
+    <div class="dialog-body">
+      <label for="bookName">책 이름</label>
+      <input id="bookName" maxlength="100" placeholder="예: 사령왕 카르나크" autocomplete="off">
+      <p class="small">다른 소설은 다른 책 이름으로 넣어 주세요. 같은 책 안의 같은 파일명은 덮어쓰지 않고 건너뜁니다.</p>
+      <label for="encoding">한글 인코딩</label>
+      <select id="encoding"><option value="auto">자동 감지 (UTF-8 / UTF-16 / EUC-KR)</option><option value="utf-8">UTF-8</option><option value="euc-kr">EUC-KR / CP949</option><option value="utf-16le">UTF-16 LE</option></select>
+      <button id="pickFilesBtn" class="primary wide" type="button">TXT 파일 선택 (여러 개 가능)</button>
+      <progress id="importProgress" max="1" value="0" hidden></progress>
+      <p id="importStatus" role="status" aria-live="polite"></p>
+      <pre id="importDetails" class="details" hidden></pre>
+    </div>
+  </dialog>
+  <dialog id="libraryDialog" aria-labelledby="libraryTitle">
+    <div class="dialog-head"><h2 id="libraryTitle">목차 · 내 책장</h2><button type="button" data-close>닫기</button></div>
+    <div class="library-controls">
+      <label for="bookSelect">책 선택</label><select id="bookSelect"></select>
+      <input id="chapterSearch" type="search" placeholder="화수 또는 파일명 검색 (예: 47)" aria-label="화수 또는 파일명으로 목차 검색" enterkeyhint="search">
+      <p id="librarySummary" class="small"></p>
+    </div>
+    <div id="chapterList" class="chapter-list dialog-body"></div>
+    <div class="dialog-actions"><button id="addToBookBtn" type="button">TXT 추가</button><button id="renameBookBtn" type="button">책 이름 변경</button><button id="deleteBookBtn" class="danger" type="button">선택한 책 삭제</button></div>
+    <details class="library-backup">
+      <summary>백업·복원</summary>
+      <div class="library-backup-content">
+      <div class="button-row"><button id="exportBtn" type="button" disabled>백업 만들기</button><button id="restoreBtn" type="button" disabled>백업 불러오기</button></div>
+      <p id="backupStatus" class="small" role="status"></p>
+      <div id="backupReady" class="button-row" hidden><a id="backupLink" class="button primary" download>백업 파일 저장</a><button id="shareBackupBtn" type="button" hidden>공유</button></div>
+      </div>
+    </details>
+  </dialog>
+  <dialog id="renameBookDialog" aria-labelledby="renameBookTitle">
+    <div class="dialog-head"><h2 id="renameBookTitle">책 이름 변경</h2><button type="button" data-close>닫기</button></div>
+    <form id="renameBookForm">
+      <div class="dialog-body">
+        <p id="renameBookOriginal" class="small"></p>
+        <label for="renameBookInput">새 책 이름</label>
+        <input id="renameBookInput" name="bookTitle" maxlength="100" autocomplete="off" required>
+        <p class="small">저장된 TXT 본문, 직접 수정한 내용, 읽던 위치, 책갈피와 표지는 유지됩니다. NAS 폴더와 파일 이름은 변경하지 않으며, NAS 폴더명이 달라지면 자동 동기화가 중단될 수 있습니다.</p>
+        <p id="renameBookError" class="small" role="status" aria-live="polite"></p>
+      </div>
+      <div class="dialog-actions"><button id="renameBookCancel" type="button">취소</button><button id="renameBookSave" class="primary" type="submit">변경 저장</button></div>
+    </form>
+  </dialog>
+  <button id="checkOfflineBtn" type="button" hidden></button>
+  <p id="cacheDetails" hidden></p>
+  <input id="fileInput" type="file" accept=".txt,text/plain" multiple hidden>
+  <input id="backupInput" type="file" accept=".json,application/json" hidden>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <noscript><div class="notice">JavaScript가 필요합니다.</div></noscript>
+  <script>
+  'use strict';
+  // Runs after the existing app binds its dialogs. Keep its database and schema.
+  document.addEventListener('DOMContentLoaded', () => {
+    const $ = id => document.getElementById(id);
+    const reader = $('reader');
+    const readerShell = document.querySelector('.reader-shell');
+    const topbar = document.querySelector('.topbar');
+    const bottombar = document.querySelector('.bottombar');
+    const prefix = 'offline-txt-v2:' + new URL('./', location.href).pathname + ':';
+    let firstTap = null;
+    let firstTapTimer = 0;
+    let touchCandidate = null;
+    let mouseSelectionBeforeTap = false;
+    let lastTouchToggleAt = -Infinity;
+    const DOUBLE_TAP_MS = 380;
+    const DOUBLE_TAP_DISTANCE = 42;
+    const TAP_MOVE_LIMIT = 12;
+    const TAP_MAX_MS = 320;
+    let lastFocus = null;
+    let snapshot = null;
+    let editorDB = null;
+    let opening = false;
+    let saving = false;
+    let closing = false;
+    let editContext = null;
+    let editorGeneration = 0;
+    const editor = document.createElement('section');
+    editor.id = 'readerEditor';
+    editor.hidden = true;
+    editor.setAttribute('aria-labelledby', 'editTitle');
+    editor.innerHTML = '<header class="reader-editor-header"><button id="editCancel" type="button">취소</button><div class="reader-editor-heading"><h2 id="editTitle">본문 편집</h2><p id="editMeta"></p></div><button id="editSave" type="button">저장</button></header><div class="reader-editor-tools"><button id="editSelectAll" type="button" disabled>현재 본문 전체 선택</button><span class="reader-editor-tools-note">붙여넣기 후 저장</span></div><textarea id="editText" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" aria-label="현재 TXT 본문"></textarea><p id="editError" role="status"></p>';
+    readerShell.appendChild(editor);
+    function reading() { return !reader.hidden; }
+    function modalOpen() { return !editor.hidden || closing || !!document.querySelector('dialog[open]'); }
+    function hasSelection() { return window.getSelection()?.isCollapsed === false; }
+    function hideBars() {
+      if (!reading() || modalOpen()) return;
+      if (topbar.contains(document.activeElement) || bottombar.contains(document.activeElement)) document.activeElement.blur();
+      window.TextviewReaderUI?.closeSettings(false);
+      document.body.classList.remove('show-topbar', 'show-bottombar');
+      $('showControls').setAttribute('aria-expanded', 'false');
+    }
+    function showBars() {
+      if (!reading() || modalOpen()) return;
+      document.body.classList.add('show-topbar', 'show-bottombar');
+      $('showControls').setAttribute('aria-expanded', 'true');
+    }
+    function toggleBars() {
+      if (!reading() || modalOpen() || hasSelection()) return;
+      if (document.body.classList.contains('show-topbar') || document.body.classList.contains('show-bottombar')) hideBars();
+      else showBars();
+    }
+    function syncReader() {
+      const active = reading();
+      document.body.classList.toggle('reading', active);
+      $('editBtn').disabled = !active || opening || saving || closing || !editor.hidden || $('openBtn').disabled;
+      $('chapterJumpBtn').disabled = !active || opening || saving || closing || !editor.hidden || $('chaptersBtn').disabled;
+      let label = '화 선택';
+      if (active) {
+        label = $('title').textContent.trim();
+        if (/^\d+$/.test(label)) label += '화';
+      }
+      $('currentChapterLabel').textContent = label;
+      $('chapterJumpBtn').setAttribute('aria-label', label + ' · 목차에서 원하는 화로 이동');
+      if (!active) document.body.classList.remove('show-topbar', 'show-bottombar');
+    }
+    new MutationObserver(syncReader).observe(reader, { attributes: true, attributeFilter: ['hidden'] });
+    new MutationObserver(syncReader).observe($('openBtn'), { attributes: true, attributeFilter: ['disabled'] });
+    new MutationObserver(syncReader).observe($('chaptersBtn'), { attributes: true, attributeFilter: ['disabled'] });
+    new MutationObserver(syncReader).observe($('title'), { childList: true, characterData: true, subtree: true });
+    syncReader();
+
+    function clearFirstTap() {
+      firstTap = null;
+      if (firstTapTimer) {
+        clearTimeout(firstTapTimer);
+        firstTapTimer = 0;
+      }
+    }
+
+    // iPhone/PWA: the first tap never changes the UI. Only a second short tap
+    // near the first one, inside the double-tap window, toggles both bars.
+    readerShell.addEventListener('touchstart', event => {
+      touchCandidate = null;
+      if (!reading() || modalOpen() || hasSelection() || event.touches.length !== 1) {
+        clearFirstTap();
+        return;
+      }
+      if (event.target.closest('button, input, textarea, select, a, [contenteditable]')) {
+        clearFirstTap();
+        return;
+      }
+      const touch = event.touches[0];
+      touchCandidate = {
+        id: touch.identifier,
+        x: touch.clientX,
+        y: touch.clientY,
+        scrollY: window.scrollY,
+        startedAt: performance.now(),
+        moved: false
+      };
+    }, { passive: true });
+
+    readerShell.addEventListener('touchmove', event => {
+      if (!touchCandidate || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      if (touch.identifier !== touchCandidate.id) {
+        touchCandidate = null;
+        clearFirstTap();
+        return;
+      }
+      const distance = Math.hypot(
+        touch.clientX - touchCandidate.x,
+        touch.clientY - touchCandidate.y
+      );
+      if (distance > TAP_MOVE_LIMIT || Math.abs(window.scrollY - touchCandidate.scrollY) > 3) {
+        touchCandidate.moved = true;
+        clearFirstTap();
+      }
+    }, { passive: true });
+
+    readerShell.addEventListener('touchend', event => {
+      const candidate = touchCandidate;
+      touchCandidate = null;
+      if (!candidate || candidate.moved || event.changedTouches.length !== 1) return;
+      if (!reading() || modalOpen()) {
+        clearFirstTap();
+        return;
+      }
+
+      const endedAt = performance.now();
+      if (endedAt - candidate.startedAt > TAP_MAX_MS ||
+          Math.abs(window.scrollY - candidate.scrollY) > 3) {
+        clearFirstTap();
+        return;
+      }
+
+      const touch = event.changedTouches[0];
+      const currentTap = {
+        x: touch.clientX,
+        y: touch.clientY,
+        time: endedAt
+      };
+
+      if (firstTap &&
+          endedAt - firstTap.time <= DOUBLE_TAP_MS &&
+          Math.hypot(currentTap.x - firstTap.x, currentTap.y - firstTap.y) <= DOUBLE_TAP_DISTANCE) {
+        clearFirstTap();
+        if (event.cancelable) event.preventDefault();
+        if (hasSelection()) window.getSelection()?.removeAllRanges();
+        lastTouchToggleAt = endedAt;
+        toggleBars();
+        return;
+      }
+
+      if (hasSelection()) { clearFirstTap(); return; }
+
+      clearFirstTap();
+      firstTap = currentTap;
+      firstTapTimer = window.setTimeout(clearFirstTap, DOUBLE_TAP_MS + 30);
+    }, { passive: false });
+
+    readerShell.addEventListener('touchcancel', () => {
+      touchCandidate = null;
+      clearFirstTap();
+    }, { passive: true });
+
+    window.addEventListener('scroll', () => {
+      touchCandidate = null;
+      clearFirstTap();
+    }, { passive: true });
+    document.addEventListener('textview:pagechange', () => {
+      touchCandidate = null;
+      clearFirstTap();
+    });
+
+    // Desktop fallback. This does not participate in iPhone touch detection.
+    readerShell.addEventListener('mousedown', event => {
+      if (event.detail <= 1) mouseSelectionBeforeTap = hasSelection();
+    });
+    readerShell.addEventListener('dblclick', event => {
+      if (!reading() || modalOpen() || mouseSelectionBeforeTap || performance.now() - lastTouchToggleAt < 700) return;
+      if (event.target.closest('button, input, textarea, select, a, [contenteditable]')) return;
+      event.preventDefault();
+      if (hasSelection()) window.getSelection()?.removeAllRanges();
+      toggleBars();
+    });
+
+    for (const bar of [topbar, bottombar]) {
+      bar.addEventListener('touchstart', clearFirstTap, { passive: true });
+      bar.addEventListener('pointerdown', clearFirstTap, { passive: true });
+    }
+    document.addEventListener('keydown', event => {
+      if (modalOpen() || event.target.closest('input, textarea, select') || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key.toLowerCase() === 'm') toggleBars();
+      if (event.key === 'Escape') hideBars();
+    });
+    $('showControls').addEventListener('click', () => { showBars(); ($('readerSettingsButton') || $('openBtn')).focus({ preventScroll: true }); });
+    $('chapterJumpBtn').addEventListener('click', () => {
+      if (!reading() || modalOpen() || $('chaptersBtn').disabled) return;
+      // Reuse the app's current-book selector and chapter navigation, not a
+      // second copy of the library or an inferred global chapter number.
+      clearFirstTap();
+      $('chaptersBtn').click();
+      if (!$('libraryDialog').open) return;
+      $('chapterSearch').focus({ preventScroll: true });
+      $('chapterList').scrollTop = 0;
+    });
+    function connect() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(prefix + 'bookshelf');
+        let expired = false;
+        const timer = setTimeout(() => { expired = true; reject(new Error('책장을 열지 못했습니다. 앱을 다시 열어 주세요.')); }, 8000);
+        request.onupgradeneeded = () => request.transaction.abort();
+        request.onerror = () => { clearTimeout(timer); reject(request.error || new Error('책장을 열지 못했습니다.')); };
+        request.onsuccess = () => {
+          clearTimeout(timer);
+          if (expired) { request.result.close(); return; }
+          const database = request.result;
+          database.onversionchange = () => database.close();
+          resolve(database);
+        };
+      });
+    }
+    function get(database, store, key) {
+      return new Promise((resolve, reject) => {
+        const tx = database.transaction(store, 'readonly');
+        const request = tx.objectStore(store).get(key);
+        let result;
+        request.onsuccess = () => { result = request.result; };
+        tx.oncomplete = () => resolve(result);
+        tx.onabort = () => reject(tx.error || request.error || new Error('본문을 읽지 못했습니다.'));
+      });
+    }
+    function pinPosition() {
+      if (!snapshot) return;
+      const key = 'position:' + snapshot.meta.id;
+      const record = { key, value: { ratio: snapshot.ratio }, updatedAt: Date.now() };
+      try { localStorage.setItem(prefix + key, JSON.stringify(record)); } catch {}
+      try {
+        if (editorDB) {
+          const tx = editorDB.transaction('state', 'readwrite');
+          tx.objectStore('state').put(record);
+          tx.onerror = () => {};
+        }
+      } catch {}
+    }
+    // Registered after app.js: preserve the pre-keyboard reading position when
+    // a mobile process is hidden, or when saving reloads the current chapter.
+    window.addEventListener('pagehide', pinPosition);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) pinPosition(); });
+    function fitEditor() {
+      if (editor.hidden) return;
+      editor.style.setProperty('--editor-height', Math.max(1, window.visualViewport?.height || innerHeight) + 'px');
+      editor.style.setProperty('--editor-top', Math.max(0, window.visualViewport?.offsetTop || 0) + 'px');
+    }
+    window.addEventListener('resize', fitEditor);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', fitEditor);
+      window.visualViewport.addEventListener('scroll', fitEditor);
+    }
+
+    async function openEditor() {
+      if (!reading() || opening || saving || closing || modalOpen() || $('openBtn').disabled) return;
+      const context = window.TextviewReaderEditing?.begin();
+      if (!context) return;
+      editContext = context;
+      const generation = ++editorGeneration;
+      const chapterId = context.id;
+      const book = $('subtitle').textContent;
+      const title = $('title').textContent;
+      const savedRatio = context.ratio;
+      opening = true;
+      lastFocus = document.activeElement;
+      $('editMeta').textContent = book + ' · ' + title;
+      $('editText').value = '';
+      $('editText').disabled = true;
+      $('editSave').disabled = true;
+      $('editSelectAll').disabled = true;
+      $('editCancel').disabled = false;
+      $('editError').textContent = '본문을 여는 중…';
+      editor.dataset.wrap = window.TextviewReaderLayout?.getState().settings.wrap || 'word';
+      editor.hidden = false;
+      document.body.classList.add('reader-editing');
+      document.documentElement.classList.add('reader-editing-root');
+      fitEditor();
+      clearFirstTap();
+      syncReader();
+      let database;
+      try {
+        if (!chapterId) throw new Error('현재 화를 확인하지 못했습니다. 작품을 다시 열어 주세요.');
+        database = await connect();
+        const meta = await get(database, 'chapters', chapterId);
+        const content = await get(database, 'texts', chapterId);
+        if (editor.hidden || generation !== editorGeneration) return;
+        // The displayed title may gain a public subtitle. Identify the chapter
+        // by its stable database key, and edit the persisted text, not the DOM.
+        if (!reading() || reader.dataset.chapterId !== chapterId) throw new Error('현재 화가 바뀌었습니다. 닫은 뒤 편집 버튼을 다시 눌러 주세요.');
+        if (!meta || meta.id !== chapterId || typeof content?.text !== 'string') throw new Error('저장된 본문을 찾지 못했습니다. 작품을 다시 열어 주세요.');
+        const original = content.text;
+        snapshot = { meta, text: original, ratio: savedRatio };
+        editorDB = database;
+        database = null;
+        $('editMeta').textContent = meta.book + ' · ' + meta.name.replace(/\.txt$/i, '');
+        $('editText').value = original;
+        $('editText').disabled = false;
+        $('editSave').disabled = false;
+        $('editSelectAll').disabled = false;
+        $('editError').textContent = '';
+        requestAnimationFrame(() => {
+          if (editor.hidden || generation !== editorGeneration) return;
+          const offset = Number.isInteger(context.textOffset) ? context.textOffset : Math.floor(original.length * savedRatio);
+          const cursor = Math.max(0, Math.min(original.length, offset));
+          $('editText').setSelectionRange(cursor, cursor);
+          $('editText').focus({ preventScroll: true });
+          $('editText').scrollTop = Math.max(0, $('editText').scrollHeight - $('editText').clientHeight) * savedRatio;
+        });
+      } catch (error) {
+        if (!editor.hidden && generation === editorGeneration) $('editError').textContent = error?.message || '편집할 본문을 열지 못했습니다.';
+      } finally {
+        if (database) database.close();
+        if (generation === editorGeneration) { opening = false; syncReader(); }
+      }
+    }
+    async function closeEditor() {
+      if (saving || closing || editor.hidden) return;
+      if (snapshot && $('editText').value !== snapshot.text && !confirm('저장하지 않은 수정 내용을 버릴까요?')) return;
+      closing = true;
+      ++editorGeneration;
+      opening = false;
+      const context = editContext;
+      pinPosition();
+      $('editText').blur();
+      editor.hidden = true;
+      document.body.classList.remove('reader-editing');
+      document.documentElement.classList.remove('reader-editing-root');
+      if (editorDB) editorDB.close();
+      editorDB = null;
+      snapshot = null;
+      editContext = null;
+      try { await window.TextviewReaderEditing?.end(context); }
+      finally {
+        closing = false;
+        syncReader();
+        const target = lastFocus?.isConnected && lastFocus.getClientRects().length ? lastFocus : $('readerSettingsButton');
+        target?.focus({ preventScroll: true });
+        document.dispatchEvent(new CustomEvent('textview:editorclosed'));
+      }
+    }
+    editor.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); void closeEditor(); }
+    });
+    $('editBtn').addEventListener('click', () => { void openEditor(); });
+    $('editCancel').addEventListener('click', () => { void closeEditor(); });
+    $('editSelectAll').addEventListener('click', () => {
+      if (editor.hidden || !snapshot || !editorDB || opening || saving || closing || $('editText').disabled) return;
+      const field = $('editText');
+      if (!field.value.length) {
+        $('editError').textContent = '선택할 본문이 없습니다.';
+        return;
+      }
+      // Keep this inside the click gesture so iPhone Safari can focus the editor.
+      field.focus({ preventScroll: true });
+      field.select();
+      field.setSelectionRange(0, field.value.length);
+      $('editError').textContent = '본문 전체를 선택했습니다. 붙여넣기로 교체한 뒤 저장하세요.';
+    });
+    window.addEventListener('beforeunload', event => {
+      if (!saving && !editor.hidden && snapshot && $('editText').value !== snapshot.text) { event.preventDefault(); event.returnValue = ''; }
+    });
+    function commitEdit(item, text, bytes) {
+      return new Promise((resolve, reject) => {
+        const tx = editorDB.transaction(['chapters', 'texts', 'state'], 'readwrite');
+        let conflict;
+        const metaRequest = tx.objectStore('chapters').get(item.meta.id);
+        metaRequest.onsuccess = () => {
+          const meta = metaRequest.result;
+          const textRequest = tx.objectStore('texts').get(item.meta.id);
+          textRequest.onsuccess = () => {
+            if (!meta || !textRequest.result || textRequest.result.text !== item.text) {
+              conflict = new Error('다른 창에서 본문이 바뀌거나 삭제되었습니다. 수정 내용을 복사해 보관하고 다시 열어 주세요.');
+              tx.abort();
+              return;
+            }
+            tx.objectStore('chapters').put({ ...meta, bytes, encoding: 'utf-8', editedAt: Date.now() });
+            tx.objectStore('texts').put({ id: meta.id, text });
+            tx.objectStore('state').put({ key: 'position:' + meta.id, value: { ratio: item.ratio }, updatedAt: Date.now() });
+            tx.objectStore('state').put({ key: 'last', value: meta.id, updatedAt: Date.now() });
+          };
+        };
+        tx.oncomplete = resolve;
+        tx.onabort = () => reject(conflict || tx.error || new Error('수정 내용을 저장하지 못했습니다.'));
+        tx.onerror = () => {};
+      });
+    }
+    $('editSave').addEventListener('click', async () => {
+      if (!snapshot || saving || !editorDB) return;
+      const text = $('editText').value;
+      const bytes = new Blob([text]).size;
+      if (bytes > 32 * 1024 * 1024) { $('editError').textContent = '본문은 32 MB까지 저장할 수 있습니다.'; return; }
+      if (text === snapshot.text) { closeEditor(); return; }
+      saving = true;
+      for (const id of ['editSave', 'editCancel', 'editSelectAll', 'editText']) $(id).disabled = true;
+      $('editError').textContent = '저장 중…';
+      try {
+        await commitEdit(snapshot, text, bytes);
+        pinPosition();
+        const record = { key: 'last', value: snapshot.meta.id, updatedAt: Date.now() };
+        try { localStorage.setItem(prefix + 'last', JSON.stringify(record)); } catch {}
+        // Reinitialization refreshes the existing app's private chapter metadata
+        // and reads the committed text from the same offline database.
+        try { sessionStorage.setItem(prefix + 'returnToReader', snapshot.meta.id); } catch {}
+        location.reload();
+      } catch (error) {
+        if (error?.name === 'QuotaExceededError') $('editError').textContent = '저장 공간이 부족합니다. 수정 내용은 이 창에 남아 있습니다.';
+        else $('editError').textContent = error?.message || '저장하지 못했습니다. 수정 내용을 복사해 보관해 주세요.';
+        saving = false;
+        for (const id of ['editSave', 'editCancel', 'editSelectAll', 'editText']) $(id).disabled = false;
+      }
+    });
+  });
+  </script>
+</body>
+</html>

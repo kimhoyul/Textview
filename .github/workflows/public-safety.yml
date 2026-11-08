@@ -1,0 +1,20 @@
+name: Protect public web-only repository
+on:
+  push:
+  pull_request:
+jobs:
+  safety-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject server files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '(^nas-gateway/|\.php$|\.sql$|(^|/)\.env(\.|$)|\.(pem|key|p12|pfx|sqlite|db)$)'; then
+            echo "Server file detected in public repository"
+            exit 1
+          fi
+          for asset in index.html app.js sw.js manifest.webmanifest; do
+            test -f "$asset" || { echo "Missing $asset"; exit 1; }
+          done
