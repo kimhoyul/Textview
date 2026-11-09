@@ -110,7 +110,10 @@
   let orderStatus = '';
   let chapterSearch = '';
   let chapterVisibleLimit = 100;
-  const api = { actions: {}, render, show, hide, setDraft, setStatus, setSearch, setTab };
+  let editingFilenameId = null;
+  let filenameDraft = '';
+  let dragState = null;
+  const api = { actions: {}, render, show, hide, setDraft, setStatus, setSearch, setTab, hasUnsavedFilenameEdit };
   window.TextviewCoverPicker = api;
 
   function getArtIndex(book) {
@@ -145,6 +148,8 @@
     if (!state.book || typeof state.book.name !== 'string') state.book = null;
     if (previousName !== state.book?.name) {
       selectedMoveId = null;
+      editingFilenameId = null;
+      filenameDraft = '';
       chapterSearch = '';
       chapterVisibleLimit = 100;
       orderStatus = '';
@@ -176,8 +181,22 @@
   }
 
 
+  function hasUnsavedFilenameEdit() {
+    if (!editingFilenameId) return false;
+    const chapter = state.chapters.find(item => item.id === editingFilenameId);
+    return !!chapter && filenameDraft !== chapter.name.replace(/\.txt$/i, '');
+  }
+
+  function clearFilenameEdit(force = false) {
+    if (!force && hasUnsavedFilenameEdit() && !confirm('작성 중인 TXT 파일명 변경을 버릴까요?')) return false;
+    editingFilenameId = null;
+    filenameDraft = '';
+    return true;
+  }
+
   function setTab(tab) {
-    if (!['cover', 'chapters'].includes(tab) || orderBusy) return;
+    if (!['cover', 'chapters'].includes(tab) || orderBusy || dragState) return;
+    if (selectedTab !== tab && !clearFilenameEdit()) return;
     if (selectedTab !== tab) selectedMoveId = null;
     selectedTab = tab;
     for (const [name, tabId, panelId] of [
@@ -195,7 +214,7 @@
   }
 
   function renderChapters() {
-    if (selectedTab !== 'chapters') return;
+    if (selectedTab !== 'chapters' || dragState) return;
     const chapters = state.chapters;
     $('bookManagerChaptersTitle').textContent = state.book?.name || '';
     $('bookManagerChaptersCount').textContent = '총 ' + chapters.length.toLocaleString('ko-KR') + '개 TXT';
@@ -213,6 +232,7 @@
       if (rendered >= chapterVisibleLimit) continue;
       rendered++;
       const row = createElement('li', 'book-manager-chapter-row');
+      row.dataset.chapterId = chapter.id;
       const info = createElement('div', 'book-manager-chapter-info');
       const rank = createElement('span', 'book-manager-chapter-rank', (index + 1) + '번째');
       const name = createElement('span', 'book-manager-chapter-name', title);
@@ -223,6 +243,7 @@
       move.disabled = !state.ready || state.busy || orderBusy;
       move.setAttribute('aria-label', title + ' 순서 변경');
       move.addEventListener('click', () => {
+        if (dragState || !clearFilenameEdit()) return;
         selectedMoveId = chapter.id;
         orderStatus = '';
         renderChapters();
@@ -230,7 +251,59 @@
         field?.focus({ preventScroll: true });
         field?.select();
       });
-      row.append(info, move);
+      const rename = createElement('button', 'book-manager-chapter-rename', '이름 수정');
+      rename.type = 'button';
+      rename.disabled = !state.ready || state.busy || orderBusy;
+      rename.setAttribute('aria-label', title + ' TXT 파일명 수정');
+      rename.addEventListener('click', () => {
+        if (dragState || orderBusy || !clearFilenameEdit()) return;
+        selectedMoveId = null;
+        editingFilenameId = chapter.id;
+        filenameDraft = chapter.name.replace(/\.txt$/i, '');
+        orderStatus = '';
+        renderChapters();
+        const input = document.getElementById('bookManagerFilenameInput');
+        input?.focus({ preventScroll: true });
+        input?.select();
+      });
+      const grip = createElement('button', 'book-manager-drag-handle', '⠿');
+      grip.type = 'button';
+      grip.disabled = !state.ready || state.busy || orderBusy || !!query;
+      grip.setAttribute('aria-label', title + ' 손잡이를 끌어서 순서 이동');
+      grip.title = query ? '검색을 지우면 드래그할 수 있습니다.' : '끌어서 순서 이동';
+      grip.addEventListener('pointerdown', event => startChapterDrag(event, chapter.id, row, grip));
+      row.append(info, rename, move, grip);
+      if (editingFilenameId === chapter.id) {
+        const form = createElement('form', 'book-manager-filename-form');
+        const inputLabel = createElement('label', 'book-manager-filename-label', '저장할 TXT 파일명');
+        inputLabel.htmlFor = 'bookManagerFilenameInput';
+        const input = createElement('input');
+        input.id = 'bookManagerFilenameInput';
+        input.type = 'text';
+        input.maxLength = 200;
+        input.autocomplete = 'off';
+        input.required = true;
+        input.value = filenameDraft;
+        input.disabled = !state.ready || state.busy || orderBusy;
+        input.setAttribute('aria-label', 'TXT 파일명, .txt 확장자는 자동 추가');
+        input.addEventListener('input', event => { filenameDraft = event.target.value; });
+        const save = createElement('button', 'book-manager-filename-save', '변경 저장');
+        save.type = 'submit';
+        save.disabled = !state.ready || state.busy || orderBusy;
+        const cancel = createElement('button', 'book-manager-filename-cancel', '취소');
+        cancel.type = 'button';
+        cancel.disabled = orderBusy;
+        cancel.addEventListener('click', () => {
+          if (!clearFilenameEdit()) return;
+          renderChapters();
+        });
+        form.append(inputLabel, input, save, cancel);
+        form.addEventListener('submit', event => {
+          event.preventDefault();
+          void applyFilenameRename(chapter.id);
+        });
+        row.appendChild(form);
+      }
       if (selectedMoveId === chapter.id) {
         const form = createElement('form', 'book-manager-chapter-position');
         const position = createElement('input');
@@ -264,6 +337,141 @@
     $('bookManagerResetOrder').disabled = !state.ready || state.busy || orderBusy;
     $('bookManagerOrderStatus').textContent = orderStatus;
     screen.querySelectorAll('.book-manager-file-actions button').forEach(button => { button.disabled = !state.ready || state.busy || orderBusy; });
+  }
+
+
+  async function applyFilenameRename(id) {
+    if (!state.book || !state.ready || state.busy || orderBusy || editingFilenameId !== id) return;
+    const original = state.chapters.find(chapter => chapter.id === id);
+    if (!original) { orderStatus = '수정할 회차를 찾지 못했습니다.'; renderChapters(); return; }
+    if (filenameDraft === original.name.replace(/\.txt$/i, '')) {
+      editingFilenameId = null;
+      renderChapters();
+      return;
+    }
+    const requestedName = filenameDraft;
+    orderBusy = true;
+    orderStatus = 'TXT 파일명을 저장하는 중…';
+    renderChapters();
+    try {
+      if (typeof api.actions.renameChapterFile !== 'function') throw new Error('회차 이름 저장 기능을 사용할 수 없습니다.');
+      await api.actions.renameChapterFile(state.book.name, id, requestedName);
+      editingFilenameId = null;
+      filenameDraft = '';
+      orderStatus = 'TXT 파일명이 변경됐습니다. 기존 본문과 읽기 기록은 유지됩니다.';
+    } catch (error) {
+      orderStatus = error?.message || 'TXT 파일명을 저장하지 못했습니다.';
+    } finally {
+      orderBusy = false;
+      renderChapters();
+      updateControls();
+    }
+  }
+
+  function clearDragVisuals() {
+    const drag = dragState;
+    if (!drag) return;
+    if (drag.dropRow) drag.dropRow.classList.remove('is-drop-before', 'is-drop-after');
+    drag.row.classList.remove('is-dragging');
+    drag.row.style.removeProperty('transform');
+    drag.row.style.removeProperty('pointer-events');
+    drag.row.style.removeProperty('z-index');
+    drag.row.style.removeProperty('position');
+    try { if (drag.handle.hasPointerCapture?.(drag.pointerId)) drag.handle.releasePointerCapture(drag.pointerId); } catch {}
+    window.removeEventListener('pointermove', moveChapterDrag);
+    window.removeEventListener('pointerup', endChapterDrag);
+    window.removeEventListener('pointercancel', cancelChapterDrag);
+    dragState = null;
+  }
+
+  function moveChapterDrag(event) {
+    const drag = dragState;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    event.preventDefault();
+    drag.row.style.transform = 'translateY(' + (event.clientY - drag.startY) + 'px)';
+    drag.moved = drag.moved || Math.abs(event.clientY - drag.startY) > 6;
+    if (event.clientY < 75) window.scrollBy(0, -22);
+    else if (event.clientY > window.innerHeight - 75) window.scrollBy(0, 22);
+    const element = document.elementFromPoint(event.clientX, event.clientY);
+    const target = element?.closest?.('.book-manager-chapter-row');
+    if (drag.dropRow) drag.dropRow.classList.remove('is-drop-before', 'is-drop-after');
+    drag.dropRow = null;
+    drag.targetId = null;
+    if (!target || target === drag.row || !$('bookManagerChapterList').contains(target)) return;
+    const rect = target.getBoundingClientRect();
+    drag.before = event.clientY < rect.top + rect.height / 2;
+    drag.targetId = target.dataset.chapterId || null;
+    drag.dropRow = target;
+    target.classList.add(drag.before ? 'is-drop-before' : 'is-drop-after');
+  }
+
+  function startChapterDrag(event, id, row, handle) {
+    if (!state.book || !state.ready || state.busy || orderBusy || dragState || selectedTab !== 'chapters') return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (editingFilenameId) {
+      orderStatus = 'TXT 이름 수정을 저장하거나 취소한 뒤 순서를 변경해 주세요.';
+      renderChapters();
+      return;
+    }
+    if (chapterSearch.trim()) {
+      orderStatus = '검색어를 지우면 드래그할 수 있습니다. 멀리 이동할 때는 위치 이동을 사용하세요.';
+      renderChapters();
+      return;
+    }
+    event.preventDefault();
+    selectedMoveId = null;
+    dragState = { id, pointerId: event.pointerId, startY: event.clientY,
+      row, handle, targetId: null, dropRow: null, before: true, moved: false };
+    row.classList.add('is-dragging');
+    row.style.position = 'relative';
+    row.style.zIndex = '5';
+    row.style.pointerEvents = 'none';
+    try { handle.setPointerCapture?.(event.pointerId); } catch {}
+    window.addEventListener('pointermove', moveChapterDrag, { passive: false });
+    window.addEventListener('pointerup', endChapterDrag);
+    window.addEventListener('pointercancel', cancelChapterDrag);
+  }
+
+  function cancelChapterDrag(event) {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    clearDragVisuals();
+    renderChapters();
+  }
+
+  function endChapterDrag(event) {
+    const drag = dragState;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    event.preventDefault();
+    const target = drag.targetId, before = drag.before, sourceId = drag.id;
+    clearDragVisuals();
+    if (!drag.moved || !target || target === sourceId) return;
+    const ids = state.chapters.map(chapter => chapter.id);
+    const from = ids.indexOf(sourceId);
+    if (from < 0) return;
+    ids.splice(from, 1);
+    const insertAt = ids.indexOf(target) + (before ? 0 : 1);
+    if (insertAt < 0) return;
+    ids.splice(insertAt, 0, sourceId);
+    if (ids.every((id, index) => id === state.chapters[index].id)) return;
+    void persistChapterDrag(ids, insertAt + 1);
+  }
+
+  async function persistChapterDrag(ids, number) {
+    if (!state.book || !state.ready || state.busy || orderBusy) return;
+    orderBusy = true;
+    orderStatus = '드래그한 목차 순서를 저장하는 중…';
+    renderChapters();
+    try {
+      if (typeof api.actions.saveOrder !== 'function') throw new Error('순서 저장 기능을 사용할 수 없습니다.');
+      await api.actions.saveOrder(state.book.name, ids);
+      orderStatus = number + '번째로 이동했습니다.';
+    } catch (error) {
+      orderStatus = error?.message || '목차 순서를 저장하지 못했습니다.';
+    } finally {
+      orderBusy = false;
+      renderChapters();
+      updateControls();
+    }
   }
 
   async function applyChapterMove(id, rawPosition) {
@@ -464,9 +672,12 @@
   }
 
   function hide() {
+    clearDragVisuals();
     screen.hidden = true;
     document.body.classList.remove('cover-visible');
     selectedMoveId = null;
+    editingFilenameId = null;
+    filenameDraft = '';
     orderStatus = '';
     chapterSearch = '';
     chapterVisibleLimit = 100;

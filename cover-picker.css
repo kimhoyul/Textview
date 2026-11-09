@@ -78,6 +78,23 @@ html:has(body.cover-visible)::-webkit-scrollbar { display: none; }
 .book-manager-chapter-name { color: #f4f1f8; font-size: 14px; line-height: 1.5; }
 .book-manager-chapter-filename { overflow: hidden; color: #98939f; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .cover-picker-screen .book-manager-chapter-move { flex-shrink: 0; min-height: 40px; padding: 8px 12px; border: 1px solid #5e5569; border-radius: 9px; color: #e0c8fe; font-size: 12px; }
+
+.cover-picker-screen .book-manager-chapter-rename { flex-shrink: 0; min-height: 40px; padding: 8px 10px; border: 1px solid #635772; border-radius: 9px; color: #e5d6f8; font-size: 12px; }
+.cover-picker-screen .book-manager-drag-handle { flex: 0 0 42px; width: 42px; min-height: 44px; border-radius: 10px; border: 1px solid #605572; background: #302a39; color: #d7c0f5; font-size: 28px; line-height: 1; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.cover-picker-screen .book-manager-drag-handle:active { cursor: grabbing; }
+.book-manager-chapter-row.is-dragging { background: #30283e; box-shadow: 0 5px 18px rgba(0,0,0,.35); opacity: .95; border-radius: 10px; }
+.book-manager-chapter-row.is-drop-before { box-shadow: inset 0 3px #c5acee; }
+.book-manager-chapter-row.is-drop-after { box-shadow: inset 0 -3px #c5acee; }
+.book-manager-filename-form { display: flex; flex: 1 0 100%; align-items: center; flex-wrap: wrap; gap: 9px; padding: 11px 0; }
+.book-manager-filename-label { flex: 1 0 100%; font-size: 12px; color: #c6bdce; }
+.book-manager-filename-form input { flex: 1 1 180px; width: 100%; min-width: 0; min-height: 42px; padding: 8px 11px; border: 1px solid #9079ab; border-radius: 9px; background: #28242d; color: #f3eef7; font-size: 16px; }
+.cover-picker-screen .book-manager-filename-save { flex: 1 1 112px; min-height: 42px; padding: 8px 12px; border-radius: 9px; background: #c5acee; color: #21192c; font-size: 13px; font-weight: 650; }
+.cover-picker-screen .book-manager-filename-cancel { flex: 1 1 72px; min-height: 42px; padding: 8px 12px; border: 1px solid #645a6c; border-radius: 9px; color: #d8d1df; font-size: 13px; }
+@media (max-width: 375px) {
+  .cover-picker-screen .book-manager-chapter-rename, .cover-picker-screen .book-manager-chapter-move { padding: 8px 8px; }
+  .book-manager-chapter-info { flex-basis: 140px; }
+}
+
 .book-manager-chapter-position { display: flex; flex: 1 0 100%; align-items: center; flex-wrap: wrap; gap: 8px; }
 .book-manager-position-label { flex: 1 1 140px; color: #b9b3c0; font-size: 12px; }
 .book-manager-chapter-position input { flex: 0 0 92px; width: 92px; min-height: 42px; padding: 8px; border: 1px solid #84739a; border-radius: 8px; background: #29252f; color: #f4f1f8; font-size: 16px; }

@@ -764,7 +764,9 @@
           }
           const targets = localChapters.filter(chapter => {
             const number = episodeNumber(chapter);
+            const oldKey = chapter.originalFileName?.normalize('NFC').toLocaleLowerCase('ko');
             return !remoteNames.has(chapter.name.normalize('NFC').toLocaleLowerCase('ko')) &&
+              !(oldKey && remoteNames.has(oldKey)) &&
               !(number && (remoteNumbers.has(number) || localCounts.get(number) > 1));
           }).length;
           if (targets) update(`NAS 누락 TXT ${targets}개 업로드 준비 중…`);
@@ -772,7 +774,9 @@
             if (!valid() || !inBook(book).some(item => item.id === chapter.id)) break;
             const num = episodeNumber(chapter);
             const nameKey = chapter.name.normalize('NFC').toLocaleLowerCase('ko');
-            if (remoteNames.has(nameKey) || (num && (remoteNumbers.has(num) || localCounts.get(num) > 1))) { skipped++; continue; }
+            const oldKey = chapter.originalFileName?.normalize('NFC').toLocaleLowerCase('ko');
+            if (remoteNames.has(nameKey) || (oldKey && remoteNames.has(oldKey)) ||
+                (num && (remoteNumbers.has(num) || localCounts.get(num) > 1))) { skipped++; continue; }
             const content = await dbRequest('texts', 'get', chapter.id);
             if (!valid() || !inBook(book).some(item => item.id === chapter.id)) break;
             if (typeof content?.text !== 'string') { skipped++; continue; }
@@ -989,6 +993,8 @@
   }
 
   function confirmLeaveCoverManager() {
+    if (window.TextviewCoverPicker?.hasUnsavedFilenameEdit?.() &&
+        !confirm('작성 중인 TXT 파일명 변경을 버리고 이동할까요?')) return false;
     return !coverDraft?.changed || confirm('저장하지 않은 표지 변경 사항을 버리고 이동할까요?');
   }
 
@@ -1021,6 +1027,134 @@
     else if (mode === 'files') openLibrary(book);
   }
 
+
+  // The chapter primary key embeds the saved filename. Rename both atomically,
+  // together with the user's edited TXT text, bookmarks and ordering metadata.
+  function renameChapterFileInDB(book, oldId, newName, original) {
+    const newId = chapterId(book, newName);
+    const originalFileName = original.originalFileName || original.name;
+    const keys = ['position:' + oldId, 'bookmark:' + oldId, 'last', 'lastBook:' + book, 'chapter-order:' + book];
+    const snapshots = new Map();
+    for (const key of keys) {
+      readState(key, null);
+      if (memoryState.has(key)) snapshots.set(key, memoryState.get(key));
+    }
+    const updated = new Map();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(['chapters', 'texts', 'state'], 'readwrite');
+      const metaStore = tx.objectStore('chapters');
+      const textStore = tx.objectStore('texts');
+      const stateStore = tx.objectStore('state');
+      let cause = null;
+      const stop = message => { if (!cause) { cause = new Error(message); tx.abort(); } };
+      const freshest = (key, stored) => {
+        const cached = snapshots.get(key);
+        return cached && (!stored || (cached.updatedAt || 0) > (stored.updatedAt || 0)) ? cached : stored;
+      };
+      const moveState = (key, nextKey = key, transform = value => value) => {
+        const request = stateStore.get(key);
+        request.onsuccess = () => {
+          const record = freshest(key, request.result);
+          if (record) {
+            const value = transform(record.value);
+            if (value !== undefined) {
+              const moved = { ...record, key: nextKey, value, updatedAt: Math.max(Date.now(), (record.updatedAt || 0) + 1) };
+              stateStore.put(moved);
+              updated.set(nextKey, moved);
+            } else if (key !== nextKey) stateStore.delete(nextKey);
+          } else if (key !== nextKey) stateStore.delete(nextKey);
+          if (nextKey !== key) stateStore.delete(key);
+        };
+      };
+      tx.oncomplete = () => resolve({ oldId, newId, newName, updated, oldKeys: ['position:' + oldId, 'bookmark:' + oldId] });
+      tx.onabort = () => reject(cause || tx.error || new Error('TXT 파일명 변경을 저장하지 못했습니다.'));
+      tx.onerror = () => {};
+      const listing = metaStore.index('book').getAll(book);
+      listing.onsuccess = () => {
+        const records = listing.result;
+        if (!Array.isArray(records) || !records.some(row => row.id === oldId && row.name === original.name)) {
+          stop('다른 창에서 회차가 변경되었습니다. 작품을 다시 열어 주세요.');
+          return;
+        }
+        if (records.some(row => row.id !== oldId &&
+            row.name.normalize('NFC').toLocaleLowerCase('ko') === newName.toLocaleLowerCase('ko'))) {
+          stop('같은 책에 동일한 TXT 파일명이 있습니다. 덮어쓰지 않았습니다.');
+          return;
+        }
+        const source = records.find(row => row.id === oldId);
+        const dest = metaStore.get(newId);
+        dest.onsuccess = () => {
+          if (dest.result) { stop('이전에 저장된 TXT와 이름이 충돌합니다.'); return; }
+          const request = textStore.get(oldId);
+          request.onsuccess = () => {
+            if (typeof request.result?.text !== 'string') {
+              stop('기존 본문이 누락되어 파일명 변경을 취소했습니다.');
+              return;
+            }
+            // add() refuses to overwrite an existing saved TXT.
+            metaStore.add({ ...source, id: newId, name: newName, originalFileName });
+            textStore.add({ ...request.result, id: newId });
+            metaStore.delete(oldId);
+            textStore.delete(oldId);
+            moveState('position:' + oldId, 'position:' + newId);
+            moveState('bookmark:' + oldId, 'bookmark:' + newId);
+            moveState('last', 'last', id => id === oldId ? newId : id);
+            moveState('lastBook:' + book, 'lastBook:' + book, id => id === oldId ? newId : id);
+            moveState('chapter-order:' + book, 'chapter-order:' + book, value =>
+              Array.isArray(value?.ids) ? { ...value, ids: value.ids.map(id => id === oldId ? newId : id) } : undefined);
+          };
+        };
+      };
+    });
+  }
+
+  async function renameManagedChapterFile(book, id, requestedName) {
+    if (!coverActive || coverBookName !== book || !db || busy || coverProcessing || editingReader || switching)
+      throw new Error('작품 관리 화면에서 다시 시도해 주세요.');
+    const chapter = chapters.find(item => item.book === book && item.id === id);
+    if (!chapter) throw new Error('회차를 찾지 못했습니다. 작품 관리를 다시 열어 주세요.');
+    const raw = typeof requestedName === 'string' ? requestedName.trim().normalize('NFC') : '';
+    const name = /\.txt$/i.test(raw) ? raw : raw + '.txt';
+    if (!raw || [...name].length > 200 || new TextEncoder().encode(name).length > 240 ||
+        /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(name) || name.startsWith('.') || /[. ]\.txt$/i.test(name)) {
+      throw new Error('TXT 파일명은 1~200자이며, 경로 구분자와 특수문자를 사용할 수 없습니다.');
+    }
+    if (name === chapter.name) return { renamed: false, name, id };
+    if (inBook(book).some(item => item.id !== id &&
+        item.name.normalize('NFC').toLocaleLowerCase('ko') === name.toLocaleLowerCase('ko')))
+      throw new Error('같은 이름의 TXT가 이미 있습니다. 원본을 덮어쓰지 않았습니다.');
+    const result = await renameChapterFileInDB(book, id, name, chapter);
+    // The IndexedDB commit must finish before localStorage mirrors can change.
+    for (const oldKey of result.oldKeys) {
+      memoryState.delete(oldKey);
+      try { localStorage.removeItem(PREFIX + oldKey); } catch {}
+    }
+    for (const [key, record] of result.updated) {
+      memoryState.set(key, record);
+      if (/^(?:last$|lastBook:|position:|bookmark:)/.test(key)) {
+        try { localStorage.setItem(PREFIX + key, JSON.stringify(record)); } catch {}
+      }
+    }
+    try {
+      if (sessionStorage.getItem(PREFIX + 'returnToReader') === id)
+        sessionStorage.setItem(PREFIX + 'returnToReader', result.newId);
+    } catch {}
+    if (current?.id === id) {
+      current = { ...current, id: result.newId, name };
+      if ($('reader').dataset.chapterId === id) $('reader').dataset.chapterId = result.newId;
+      if (readingActive) {
+        $('title').textContent = displayChapterTitle(current, true);
+        document.title = displayChapterTitle(current, true) + ' · 호율 시리즈';
+      }
+    }
+    // Preserve the old Synology spelling as metadata. A later background scan
+    // must not create a second NAS file when the original still exists.
+    await refreshChapters();
+    renderCoverPicker();
+    showToast('TXT 파일명을 변경했습니다. 본문과 읽기 기록은 유지됩니다.');
+    return { renamed: true, name, id: result.newId };
+  }
+
   async function saveManagedChapterOrder(book, ids = null) {
     if (!coverActive || coverBookName !== book || busy || coverProcessing || !db) {
       throw new Error('작품 관리 화면에서 다시 시도해 주세요.');
@@ -1028,6 +1162,8 @@
     await persistChapterOrder(book, ids);
     renderHome();
     updateNavigation();
+    // Refresh the combined management list immediately after a successful save.
+    renderCoverPicker();
   }
 
   async function searchCovers(query) {
@@ -2304,6 +2440,7 @@
         const text = byId.get(meta.id);
         if (typeof text !== 'string') throw new Error('누락된 본문이 있어 백업을 중단했습니다: ' + meta.name);
         return { book: meta.book, name: meta.name, text, encoding: meta.encoding,
+          ...(typeof meta.originalFileName === 'string' ? { originalFileName: meta.originalFileName } : {}),
           position: ratioOf(meta.id), bookmark: readState('bookmark:' + meta.id, null) };
       });
       const payload = { format: 'offline-txt-bookshelf', version: 1, exportedAt: new Date().toISOString(),
@@ -2355,7 +2492,11 @@
       // Validate the whole structure before writing; existing chapters are never overwritten.
       for (const item of payload.chapters) {
         if (!item || typeof item.book !== 'string' || !item.book.trim() || item.book.length > 100 ||
-            typeof item.name !== 'string' || !item.name || item.name.length > 255 || typeof item.text !== 'string' || item.text.length > MAX_FILE_BYTES) throw new Error('백업에 올바르지 않거나 너무 큰 TXT 항목이 있습니다.');
+            typeof item.name !== 'string' || !item.name || item.name.length > 255 || typeof item.text !== 'string' || item.text.length > MAX_FILE_BYTES ||
+            (item.originalFileName !== undefined &&
+              (typeof item.originalFileName !== 'string' || item.originalFileName.length > 255 ||
+                !/\.txt$/i.test(item.originalFileName) || /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(item.originalFileName))))
+          throw new Error('백업에 올바르지 않거나 너무 큰 TXT 항목이 있습니다.');
       }
       const validBooks = new Set([...chapters.map(chapter => chapter.book),
         ...payload.chapters.map(item => item.book.trim().normalize('NFC'))]);
@@ -2414,7 +2555,9 @@
         const book = item.book.trim().normalize('NFC');
         const id = chapterId(book, item.name);
         if (known.has(id)) { skipped++; continue; }
-        await saveChapter({ id, book, name: item.name, bytes: new Blob([item.text]).size, encoding: 'backup', addedAt: Date.now() }, item.text);
+        await saveChapter({ id, book, name: item.name, bytes: new Blob([item.text]).size, encoding: 'backup',
+          ...(typeof item.originalFileName === 'string' ? { originalFileName: item.originalFileName } : {}),
+          addedAt: Date.now() }, item.text);
         availableBooks.add(book);
         known.add(id);
         writeState('position:' + id, { ratio: clamp(item.position, 0, 1, 0) });
@@ -2616,6 +2759,7 @@
     back: backFromCoverManager, selectFile: selectCoverFile, useDefault: useDefaultCover,
     save: saveCover, openBook: readFromCoverManager, search: searchCovers,
     chooseResult: selectSearchCover,
+    renameChapterFile: (book, id, name) => renameManagedChapterFile(book, id, name),
     saveOrder: (book, ids) => saveManagedChapterOrder(book, ids),
     resetOrder: book => saveManagedChapterOrder(book, null),
     newTXT: book => navigateCoverManager('new', book),
