@@ -82,6 +82,7 @@
   let newTXTOrigin = '';
   let newTXTInitial = null;
   let renameBookReturnToLibrary = false;
+  let coverReturnTarget = 'shelf';
   let chapterOrderEditing = false;
   let chapterOrderMoveId = null;
   let chapterOrderSaving = false;
@@ -930,6 +931,7 @@
   }
 
   function hideCoverPicker() {
+    coverReturnTarget = 'shelf';
     coverRequest++;
     coverSearchRequest++;
     window.TextviewCoverPicker?.hide();
@@ -940,16 +942,25 @@
 
   function renderCoverPicker() {
     if (!coverBookName || !window.TextviewCoverPicker) return;
-    window.TextviewCoverPicker.render({ book: bookModel(coverBookName),
-      ready: !!db && !busy && !switching, busy: coverProcessing });
+    const list = inBook(coverBookName);
+    window.TextviewCoverPicker.render({
+      book: bookModel(coverBookName),
+      chapters: list.map(chapter => ({ id: chapter.id, name: chapter.name,
+        title: displayChapterTitle(chapter, true), episodeNumber: chapterSortNumber(chapter) })),
+      hasCustomOrder: !!storedChapterOrder(coverBookName),
+      ready: !!db && !busy && !switching, busy: coverProcessing
+    });
     if (coverDraft) window.TextviewCoverPicker.setDraft(coverDraft);
     window.TextviewCoverPicker.setSearch?.(coverSearch);
   }
 
-  function showCoverPicker(book) {
-    if (editingReader || busy || switching || suppressPosition || coverProcessing || !db || !window.TextviewCoverPicker || !inBook(book).length) return;
+  function showCoverPicker(book, tab = 'cover') {
+    if (editingReader || busy || switching || suppressPosition || coverProcessing || !db ||
+        !window.TextviewCoverPicker || !inBook(book).length) return;
+    const returnToDetail = detailActive && detailBookName === book;
     savePosition();
     hideCoverPicker();
+    coverReturnTarget = returnToDetail ? 'detail' : 'shelf';
     coverBookName = book;
     coverActive = true;
     const saved = storedCover(book);
@@ -969,11 +980,54 @@
     window.TextviewShelf?.hide();
     window.TextviewBookDetail?.hide();
     renderCoverPicker();
+    window.TextviewCoverPicker.setTab(tab === 'chapters' ? 'chapters' : 'cover');
     window.TextviewCoverPicker.setStatus('');
     window.TextviewCoverPicker.show();
     $('themeColor').content = '#111214';
-    document.title = book + ' · 표지 선택';
-    void searchCovers(book);
+    document.title = book + ' · 작품 관리';
+    if (tab !== 'chapters') void searchCovers(book);
+  }
+
+  function confirmLeaveCoverManager() {
+    return !coverDraft?.changed || confirm('저장하지 않은 표지 변경 사항을 버리고 이동할까요?');
+  }
+
+  function backFromCoverManager() {
+    if (!coverActive || !confirmLeaveCoverManager()) return;
+    const book = coverBookName;
+    const target = coverReturnTarget;
+    const priorDetailReturn = detailReturn;
+    hideCoverPicker();
+    if (target === 'detail' && book && inBook(book).length) {
+      showBookDetail(book);
+      detailReturn = priorDetailReturn;
+    } else showShelf();
+  }
+
+  function readFromCoverManager(book) {
+    if (!coverActive || book !== coverBookName || !confirmLeaveCoverManager()) return;
+    hideCoverPicker();
+    showBookDetail(book);
+    detailReturn = 'shelf';
+  }
+
+  function navigateCoverManager(mode, book) {
+    if (!coverActive || coverBookName !== book || !confirmLeaveCoverManager()) return;
+    hideCoverPicker();
+    showShelf();
+    if (mode === 'new') openNewTXT(book);
+    else if (mode === 'import') openImport(book);
+    else if (mode === 'rename') openRenameBook(book);
+    else if (mode === 'files') openLibrary(book);
+  }
+
+  async function saveManagedChapterOrder(book, ids = null) {
+    if (!coverActive || coverBookName !== book || busy || coverProcessing || !db) {
+      throw new Error('작품 관리 화면에서 다시 시도해 주세요.');
+    }
+    await persistChapterOrder(book, ids);
+    renderHome();
+    updateNavigation();
   }
 
   async function searchCovers(query) {
@@ -1081,9 +1135,15 @@
         episodeTitleStatus.delete(book);
         pendingNASNames.delete(book);
       }
+      // Stay on the unified screen so the user can manage chapters next.
+      // Replace any temporary image URL with the newly committed DB record.
+      releaseCoverDraft();
+      const stored = storedCover(book);
+      coverDraft = { url: coverURL(book), custom: !!stored,
+        changed: false, ownedURL: false, ...coverCredits(stored) };
       coverProcessing = false;
       renderHome();
-      showShelf();
+      window.TextviewCoverPicker.setStatus('표지를 저장했습니다.');
       showToast('표지를 저장했습니다.');
     } catch (error) {
       window.TextviewCoverPicker.setStatus('표지 저장에 실패했습니다. ' + explainError(error), true);
@@ -1734,12 +1794,7 @@
 
   function openChapterOrder(book) {
     if (!db || busy || editingReader || switching) return;
-    openLibrary(book);
-    if (!$('libraryDialog').open) return;
-    chapterOrderEditing = true;
-    chapterOrderMoveId = null;
-    chapterOrderMessage = '';
-    renderChapterList();
+    showCoverPicker(book, 'chapters');
   }
 
   function openImport(book) {
@@ -2547,7 +2602,8 @@
   };
   if (window.HoyulComix) window.HoyulComix.actions = { openNovel: () => { window.HoyulComix.hide(); showHome(); }, notify: showToast };
   if (window.TextviewShelf) window.TextviewShelf.actions = {
-    openBook: showCoverPicker, manageBook: openLibrary, renameBook: openRenameBook, newTXT: openNewTXT,
+    openBook: showCoverPicker, manageBook: book => showCoverPicker(book, 'chapters'),
+    renameBook: openRenameBook, newTXT: openNewTXT,
     openImport: () => openImport(), openHelp,
     showHome, notify: showToast
   };
@@ -2557,8 +2613,15 @@
     reorderChapters: openChapterOrder
   };
   if (window.TextviewCoverPicker) window.TextviewCoverPicker.actions = {
-    back: showShelf, selectFile: selectCoverFile, useDefault: useDefaultCover,
-    save: saveCover, openBook: showBookDetail, search: searchCovers, chooseResult: selectSearchCover
+    back: backFromCoverManager, selectFile: selectCoverFile, useDefault: useDefaultCover,
+    save: saveCover, openBook: readFromCoverManager, search: searchCovers,
+    chooseResult: selectSearchCover,
+    saveOrder: (book, ids) => saveManagedChapterOrder(book, ids),
+    resetOrder: book => saveManagedChapterOrder(book, null),
+    newTXT: book => navigateCoverManager('new', book),
+    importTXT: book => navigateCoverManager('import', book),
+    renameBook: book => navigateCoverManager('rename', book),
+    manageFiles: book => navigateCoverManager('files', book)
   };
   if (window.TextviewReaderUI) window.TextviewReaderUI.actions = {
     back: backFromReader, toggleBookmark, openContents: () => openLibrary(current?.book),

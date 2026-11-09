@@ -1,4 +1,4 @@
-/* A cover editor. app.js owns image processing, storage, and navigation. */
+/* Unified book management: cover and chapter ordering. app.js owns storage. */
 (() => {
   'use strict';
 
@@ -19,12 +19,16 @@
   screen.innerHTML = `
     <header class="cover-picker-header">
       <div class="cover-picker-toprow">
-        <button class="cover-picker-cancel" type="button" data-cover-action="back">취소</button>
-        <h1 id="coverPickerHeading" tabindex="-1">표지 선택</h1>
-        <button id="coverPickerSave" class="cover-picker-save" type="button" data-cover-action="save" disabled>저장</button>
+        <button class="cover-picker-cancel" type="button" data-cover-action="back">뒤로</button>
+        <h1 id="coverPickerHeading" tabindex="-1">작품 관리</h1>
+        <button id="coverPickerSave" class="cover-picker-save" type="button" data-cover-action="save" disabled>표지 저장</button>
       </div>
     </header>
-    <section class="cover-picker-content" aria-labelledby="coverPickerBookName">
+    <nav class="book-manager-tabs" role="tablist" aria-label="작품 관리 항목">
+      <button id="bookManagerCoverTab" class="is-active" type="button" role="tab" aria-selected="true" aria-controls="coverPickerCoverPanel" data-cover-action="tab-cover">표지 설정</button>
+      <button id="bookManagerChaptersTab" type="button" role="tab" aria-selected="false" aria-controls="coverPickerChaptersPanel" data-cover-action="tab-chapters">목차·순서</button>
+    </nav>
+    <section id="coverPickerCoverPanel" class="cover-picker-content" role="tabpanel" aria-labelledby="bookManagerCoverTab">
       <button id="coverPickerPreviewButton" class="cover-picker-preview-button" type="button" data-cover-action="choose" aria-label="표지 이미지 선택">
         <span id="coverPickerPreview" class="cover-picker-preview cover-picker-art-0" aria-hidden="true">
           <span id="coverPickerPreviewTitle" class="cover-picker-preview-title"></span>
@@ -68,6 +72,28 @@
       </details>
       <button id="coverPickerRead" class="cover-picker-read" type="button" data-cover-action="read">작품 읽기 ${icon('next')}</button>
     </section>
+    <section id="coverPickerChaptersPanel" class="book-manager-chapters" role="tabpanel" aria-labelledby="bookManagerChaptersTab" hidden>
+      <header class="book-manager-chapters-heading">
+        <h2 id="bookManagerChaptersTitle"></h2>
+        <span id="bookManagerChaptersCount"></span>
+      </header>
+      <label class="book-manager-chapter-search-label" for="bookManagerChapterSearch">목차 검색</label>
+      <input id="bookManagerChapterSearch" class="book-manager-chapter-search" type="search" placeholder="회차 번호 또는 TXT 파일명" autocomplete="off" enterkeyhint="search">
+      <div class="book-manager-order-tools">
+        <p>각 TXT의 위치 이동을 눌러 순서를 변경할 수 있습니다.</p>
+        <button id="bookManagerResetOrder" type="button" data-cover-action="reset-order" hidden>회차 번호순 복원</button>
+      </div>
+      <p id="bookManagerOrderStatus" class="book-manager-order-status" role="status" aria-live="polite"></p>
+      <ol id="bookManagerChapterList" class="book-manager-chapter-list"></ol>
+      <p id="bookManagerEmptyResults" class="book-manager-empty-results" hidden>일치하는 TXT가 없습니다.</p>
+      <button id="bookManagerChapterMore" class="book-manager-chapter-more" type="button" data-cover-action="more-chapters" hidden>목차 더 보기</button>
+      <div class="book-manager-file-actions" aria-label="작품 파일 관리">
+        <button type="button" data-cover-action="new-txt">새 TXT 만들기</button>
+        <button type="button" data-cover-action="import-txt">TXT 가져오기</button>
+        <button type="button" data-cover-action="rename-book">책 이름 변경</button>
+        <button type="button" data-cover-action="files">백업·삭제 등 관리</button>
+      </div>
+    </section>
     <input id="coverPickerFile" class="cover-picker-visually-hidden" type="file" accept="image/*" tabindex="-1" aria-label="책 표지 이미지 파일">
   `;
   document.body.appendChild(screen);
@@ -78,7 +104,13 @@
   let searchState = { query: '', results: [], loading: false, error: '', searched: false };
   let previousFocus = null;
   let previousThemeColor = null;
-  const api = { actions: {}, render, show, hide, setDraft, setStatus, setSearch };
+  let selectedTab = 'cover';
+  let selectedMoveId = null;
+  let orderBusy = false;
+  let orderStatus = '';
+  let chapterSearch = '';
+  let chapterVisibleLimit = 100;
+  const api = { actions: {}, render, show, hide, setDraft, setStatus, setSearch, setTab };
   window.TextviewCoverPicker = api;
 
   function getArtIndex(book) {
@@ -108,8 +140,15 @@
     state = { ...state, ...data };
     state.ready = Boolean(state.ready);
     state.busy = Boolean(state.busy);
+    state.chapters = Array.isArray(state.chapters) ? state.chapters.filter(chapter => chapter && typeof chapter.id === 'string') : [];
+    state.hasCustomOrder = Boolean(state.hasCustomOrder);
     if (!state.book || typeof state.book.name !== 'string') state.book = null;
     if (previousName !== state.book?.name) {
+      selectedMoveId = null;
+      chapterSearch = '';
+      chapterVisibleLimit = 100;
+      orderStatus = '';
+      $('bookManagerChapterSearch').value = '';
       draft = {
         url: state.book?.coverUrl || '',
         custom: Boolean(state.book?.hasCustomCover),
@@ -131,8 +170,149 @@
     $('coverPickerBookCount').textContent = state.book ? `총 ${Math.max(0, Number(state.book.count) || 0)}화` : '';
     $('coverPickerPreview').className = 'cover-picker-preview cover-picker-art-' + getArtIndex(state.book);
     updatePreview();
+    renderChapters();
     updateControls();
     if (data.error !== undefined) setStatus(data.error || '', Boolean(data.error));
+  }
+
+
+  function setTab(tab) {
+    if (!['cover', 'chapters'].includes(tab) || orderBusy) return;
+    if (selectedTab !== tab) selectedMoveId = null;
+    selectedTab = tab;
+    for (const [name, tabId, panelId] of [
+      ['cover', 'bookManagerCoverTab', 'coverPickerCoverPanel'],
+      ['chapters', 'bookManagerChaptersTab', 'coverPickerChaptersPanel']
+    ]) {
+      const selected = name === tab;
+      $(tabId).setAttribute('aria-selected', String(selected));
+      $(tabId).classList.toggle('is-active', selected);
+      $(panelId).hidden = !selected;
+    }
+    $('coverPickerSave').hidden = tab !== 'cover';
+    renderChapters();
+    updateControls();
+  }
+
+  function renderChapters() {
+    if (selectedTab !== 'chapters') return;
+    const chapters = state.chapters;
+    $('bookManagerChaptersTitle').textContent = state.book?.name || '';
+    $('bookManagerChaptersCount').textContent = '총 ' + chapters.length.toLocaleString('ko-KR') + '개 TXT';
+    const input = $('bookManagerChapterSearch');
+    if (input.value !== chapterSearch) input.value = chapterSearch;
+    const query = chapterSearch.trim().toLocaleLowerCase('ko');
+    const fragment = document.createDocumentFragment();
+    let totalMatches = 0;
+    let rendered = 0;
+    for (let index = 0; index < chapters.length; index++) {
+      const chapter = chapters[index];
+      const title = String(chapter.title || chapter.name || '제목 없음');
+      if (query && !(title + ' ' + chapter.name + ' ' + (index + 1)).toLocaleLowerCase('ko').includes(query)) continue;
+      totalMatches++;
+      if (rendered >= chapterVisibleLimit) continue;
+      rendered++;
+      const row = createElement('li', 'book-manager-chapter-row');
+      const info = createElement('div', 'book-manager-chapter-info');
+      const rank = createElement('span', 'book-manager-chapter-rank', (index + 1) + '번째');
+      const name = createElement('span', 'book-manager-chapter-name', title);
+      const filename = createElement('span', 'book-manager-chapter-filename', chapter.name);
+      info.append(rank, name, filename);
+      const move = createElement('button', 'book-manager-chapter-move', '위치 이동');
+      move.type = 'button';
+      move.disabled = !state.ready || state.busy || orderBusy;
+      move.setAttribute('aria-label', title + ' 순서 변경');
+      move.addEventListener('click', () => {
+        selectedMoveId = chapter.id;
+        orderStatus = '';
+        renderChapters();
+        const field = document.getElementById('bookManagerMovePosition');
+        field?.focus({ preventScroll: true });
+        field?.select();
+      });
+      row.append(info, move);
+      if (selectedMoveId === chapter.id) {
+        const form = createElement('form', 'book-manager-chapter-position');
+        const position = createElement('input');
+        position.type = 'number';
+        position.inputMode = 'numeric';
+        position.step = '1';
+        position.min = '1';
+        position.max = String(chapters.length);
+        position.value = String(index + 1);
+        position.id = 'bookManagerMovePosition';
+        position.required = true;
+        position.setAttribute('aria-label', '이동할 위치');
+        const submit = createElement('button', 'book-manager-position-save', '적용');
+        submit.type = 'submit';
+        submit.disabled = !state.ready || state.busy || orderBusy;
+        form.append(createElement('span', 'book-manager-position-label', '이동 위치 (1~' + chapters.length + ')'), position, submit);
+        form.addEventListener('submit', event => {
+          event.preventDefault();
+          void applyChapterMove(chapter.id, position.value);
+        });
+        row.appendChild(form);
+      }
+      fragment.appendChild(row);
+    }
+    $('bookManagerChapterList').replaceChildren(fragment);
+    $('bookManagerEmptyResults').hidden = totalMatches > 0;
+    $('bookManagerChapterMore').hidden = rendered >= totalMatches;
+    $('bookManagerChapterMore').textContent = '목차 더 보기 (' + rendered + ' / ' + totalMatches + ')';
+    $('bookManagerChapterMore').disabled = !state.ready || state.busy || orderBusy;
+    $('bookManagerResetOrder').hidden = !state.hasCustomOrder;
+    $('bookManagerResetOrder').disabled = !state.ready || state.busy || orderBusy;
+    $('bookManagerOrderStatus').textContent = orderStatus;
+    screen.querySelectorAll('.book-manager-file-actions button').forEach(button => { button.disabled = !state.ready || state.busy || orderBusy; });
+  }
+
+  async function applyChapterMove(id, rawPosition) {
+    if (!state.book || !state.ready || state.busy || orderBusy) return;
+    const ids = state.chapters.map(chapter => chapter.id);
+    const from = ids.indexOf(id);
+    const to = Number(rawPosition) - 1;
+    if (from < 0 || !Number.isSafeInteger(to) || to < 0 || to >= ids.length) {
+      orderStatus = '이동 위치는 1부터 ' + ids.length + '까지 입력해 주세요.';
+      renderChapters();
+      return;
+    }
+    if (from === to) { selectedMoveId = null; renderChapters(); return; }
+    ids.splice(from, 1);
+    ids.splice(to, 0, id);
+    orderBusy = true;
+    orderStatus = '목차 순서를 저장하는 중…';
+    renderChapters();
+    try {
+      if (typeof api.actions.saveOrder !== 'function') throw new Error('순서 저장 기능을 사용할 수 없습니다.');
+      await api.actions.saveOrder(state.book.name, ids);
+      selectedMoveId = null;
+      orderStatus = (to + 1) + '번째로 이동했습니다.';
+    } catch (error) {
+      orderStatus = error?.message || '회차 순서를 저장하지 못했습니다.';
+    } finally {
+      orderBusy = false;
+      renderChapters();
+      updateControls();
+    }
+  }
+
+  async function resetChapterOrder() {
+    if (!state.book || !state.hasCustomOrder || !state.ready || state.busy || orderBusy) return;
+    orderBusy = true;
+    orderStatus = '회차 번호순으로 복원하는 중…';
+    renderChapters();
+    try {
+      if (typeof api.actions.resetOrder !== 'function') throw new Error('순서 복원 기능을 사용할 수 없습니다.');
+      await api.actions.resetOrder(state.book.name);
+      selectedMoveId = null;
+      orderStatus = '회차 번호순으로 복원했습니다.';
+    } catch (error) {
+      orderStatus = error?.message || '순서를 복원하지 못했습니다.';
+    } finally {
+      orderBusy = false;
+      renderChapters();
+      updateControls();
+    }
   }
 
   function setDraft(data = {}) {
@@ -246,9 +426,12 @@
 
   function updateControls() {
     const unavailable = !state.ready || state.busy || !state.book;
-    $('coverPickerSave').disabled = unavailable || !draft.changed;
-    $('coverPickerSave').textContent = '저장';
-    screen.setAttribute('aria-busy', String(state.busy));
+    $('coverPickerSave').disabled = unavailable || !draft.changed || orderBusy;
+    $('coverPickerSave').hidden = selectedTab !== 'cover';
+    $('coverPickerSave').textContent = '표지 저장';
+    screen.setAttribute('aria-busy', String(state.busy || orderBusy));
+    $('bookManagerCoverTab').disabled = orderBusy;
+    $('bookManagerChaptersTab').disabled = orderBusy;
     $('coverPickerPreviewButton').disabled = unavailable;
     $('coverPickerChoose').disabled = unavailable;
     $('coverPickerDefault').disabled = unavailable;
@@ -256,7 +439,7 @@
     $('coverPickerSearchButton').disabled = unavailable || searchState.loading || !$('coverPickerSearchInput').value.trim();
     $('coverPickerSearchInput').disabled = !state.ready || state.busy || !state.book;
     screen.querySelectorAll('[data-cover-action="result"]').forEach(button => { button.disabled = unavailable || searchState.loading; });
-    screen.querySelector('[data-cover-action="back"]').disabled = state.busy;
+    screen.querySelector('[data-cover-action="back"]').disabled = state.busy || orderBusy;
   }
 
   function setStatus(message = '', isError = false) {
@@ -283,6 +466,11 @@
   function hide() {
     screen.hidden = true;
     document.body.classList.remove('cover-visible');
+    selectedMoveId = null;
+    orderStatus = '';
+    chapterSearch = '';
+    chapterVisibleLimit = 100;
+    $('bookManagerChapterSearch').value = '';
     $('coverPickerFile').value = '';
     const color = document.querySelector('meta[name="theme-color"]');
     if (color && previousThemeColor) color.content = previousThemeColor;
@@ -298,7 +486,15 @@
     const button = event.target.closest('[data-cover-action]');
     if (!button || !screen.contains(button) || button.disabled) return;
     const action = button.dataset.coverAction;
-    if (action === 'choose') $('coverPickerFile').click();
+    if (action === 'tab-cover') setTab('cover');
+    else if (action === 'tab-chapters') setTab('chapters');
+    else if (action === 'reset-order') { void resetChapterOrder(); }
+    else if (action === 'more-chapters') { chapterVisibleLimit += 100; renderChapters(); }
+    else if (action === 'new-txt') invoke('newTXT', state.book?.name);
+    else if (action === 'import-txt') invoke('importTXT', state.book?.name);
+    else if (action === 'rename-book') invoke('renameBook', state.book?.name);
+    else if (action === 'files') invoke('manageFiles', state.book?.name);
+    else if (action === 'choose') $('coverPickerFile').click();
     else if (action === 'default') invoke('useDefault');
     else if (action === 'read') invoke('openBook', state.book?.name);
     else if (action === 'save' && draft.changed) invoke('save');
@@ -317,13 +513,19 @@
     invoke('search', query);
   });
   $('coverPickerSearchInput').addEventListener('input', updateControls);
+  $('bookManagerChapterSearch').addEventListener('input', event => {
+    chapterSearch = event.target.value;
+    chapterVisibleLimit = 100;
+    selectedMoveId = null;
+    renderChapters();
+  });
   $('coverPickerFile').addEventListener('change', event => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (file && state.ready && !state.busy) invoke('selectFile', file);
   });
   screen.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !state.busy) {
+    if (event.key === 'Escape' && !state.busy && !orderBusy) {
       event.preventDefault();
       invoke('back');
     }

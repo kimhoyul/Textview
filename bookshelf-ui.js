@@ -172,12 +172,12 @@
     if (!editingBooks) return row;
     const group = element('div', 'bookshelf-edit-item');
     const actions = element('div', 'bookshelf-item-actions');
-    const manage = element('button', 'bookshelf-item-manage', '목차·관리');
+    const manage = element('button', 'bookshelf-item-manage', '작품 관리');
     manage.type = 'button';
     manage.dataset.shelfAction = 'manage-book';
     manage.dataset.bookIndex = row.dataset.bookIndex;
     manage.disabled = !state.ready;
-    manage.setAttribute('aria-label', book.name + ' 목차 및 파일 관리');
+    manage.setAttribute('aria-label', book.name + ' 작품 관리 · 표지와 목차 순서');
     const rename = element('button', 'bookshelf-item-rename', '이름 변경');
     rename.type = 'button';
     rename.dataset.shelfAction = 'rename-book';
