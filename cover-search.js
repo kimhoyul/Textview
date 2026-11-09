@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const DEFAULT_ENDPOINT = 'https://chhc007.synology.me:9444/textview-nas/api.php';
-  const UPDATE_MESSAGE = '국내 작품 표지를 검색하려면 NAS 연결 파일을 업데이트해 주세요.';
+  const UPDATE_MESSAGE = 'NAS 표지 검색 기능을 사용할 수 없습니다. NAS 서버 연결과 검색 파일을 확인해 주세요.';
   const cache = new Map();
   let endpoint = '';
   const mainContext = { session: null, bootstrap: null };
@@ -48,12 +48,27 @@
   async function supportsSeries() {
     const url = getEndpoint();
     if (health && health.time > Date.now() - 60000) return health.available;
+    const mark = (available, issue = '') => {
+      health = { time: Date.now(), available, issue };
+      return available;
+    };
+    let response;
     try {
-      const response = await fetchTimed(url + '?health=1');
-      const body = await response.json();
-      health = { time: Date.now(), available: response.ok && body.ok === true && body.coverSearch === true };
-    } catch { health = { time: Date.now(), available: false }; }
-    return health.available;
+      response = await fetchTimed(url + '?health=1');
+    } catch {
+      return mark(false, 'NAS 표지 검색 서버에 연결하지 못했습니다. NAS 접속 주소, HTTPS 및 외부 접속 상태를 확인해 주세요.');
+    }
+    if (!response.ok) return mark(false,
+      `NAS 표지 검색 서버가 상태 확인을 거부했습니다 (HTTP ${response.status}). NAS 연결 주소와 서버 설정을 확인해 주세요.`);
+    let body;
+    try { body = await response.json(); }
+    catch { return mark(false, 'NAS 표지 검색 서버가 올바른 JSON 상태 정보를 보내지 않았습니다. NAS api.php를 확인해 주세요.'); }
+    if (body?.ok !== true) return mark(false, 'NAS 표지 검색 상태 정보가 올바르지 않습니다. NAS api.php를 확인해 주세요.');
+    if (body.coverSearch !== true) return mark(false,
+      body.curl === false
+        ? 'NAS 서버에서 PHP cURL 확장이 비활성화되어 표지를 검색하지 못합니다.'
+        : 'NAS의 표지 검색 기능이 비활성화되어 있습니다. cover-search.php와 PHP DOM 설정을 확인해 주세요.');
+    return mark(true);
   }
 
   async function gateway(action, payload = {}, image = false, retry = true, context = mainContext) {
@@ -135,9 +150,9 @@
     }
     if (!results.length) {
       try { results = await searchLibrary(query); }
-      catch (error) { throw primaryError || new Error(!available ? UPDATE_MESSAGE : error.message); }
+      catch (error) { throw primaryError || new Error(!available ? (health?.issue || UPDATE_MESSAGE) : error.message); }
     }
-    if (!results.length && (!available || primaryError)) throw primaryError || new Error(UPDATE_MESSAGE);
+    if (!results.length && (!available || primaryError)) throw primaryError || new Error(health?.issue || UPDATE_MESSAGE);
     if (cache.size >= 20) cache.delete(cache.keys().next().value);
     cache.set(key, { time: Date.now(), results });
     return results;
@@ -165,9 +180,9 @@
     }
     if (!results.length) {
       try { results = metadata(await searchLibrary(query)); }
-      catch (error) { throw primaryError || new Error(!available ? UPDATE_MESSAGE : error.message); }
+      catch (error) { throw primaryError || new Error(!available ? (health?.issue || UPDATE_MESSAGE) : error.message); }
     }
-    if (!results.length && (!available || primaryError)) throw primaryError || new Error(UPDATE_MESSAGE);
+    if (!results.length && (!available || primaryError)) throw primaryError || new Error(health?.issue || UPDATE_MESSAGE);
     return results;
   }
 
