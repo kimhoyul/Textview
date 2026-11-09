@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="호율 시리즈">
   <meta name="description" content="소설 TXT와 만화 이미지를 기기에 보관하고 인터넷 없이 읽는 호율 시리즈">
-  <meta name="app-version" content="2.13.1">
+  <meta name="app-version" content="2.14.0">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" sizes="180x180" href="./icons/hoyul-flat-apple-touch.png">
   <link rel="icon" type="image/png" href="./icons/hoyul-flat-192.png">
@@ -171,6 +171,11 @@
       <label for="bookSelect">책 선택</label><select id="bookSelect"></select>
       <input id="chapterSearch" type="search" placeholder="화수 또는 파일명 검색 (예: 47)" aria-label="화수 또는 파일명으로 목차 검색" enterkeyhint="search">
       <p id="librarySummary" class="small"></p>
+      <div class="chapter-order-toolbar">
+        <button id="chapterOrderToggle" type="button">순서 편집</button>
+        <button id="chapterOrderReset" type="button" hidden>회차 번호순 복원</button>
+      </div>
+      <p id="chapterOrderMessage" class="small" role="status" aria-live="polite"></p>
     </div>
     <div id="chapterList" class="chapter-list dialog-body"></div>
     <div class="dialog-actions library-book-actions"><button id="addToBookBtn" type="button">TXT 가져오기</button><button id="newTXTInBookBtn" type="button">새 TXT 만들기</button><button id="renameBookBtn" type="button">책 이름 변경</button><button id="deleteBookBtn" class="danger" type="button">선택한 책 삭제</button></div>

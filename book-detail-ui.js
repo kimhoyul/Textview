@@ -51,7 +51,8 @@
       <div class="detail-list-tools">
         <p class="detail-count" id="bookDetailResultCount" role="status" aria-live="polite"></p>
         <button class="detail-title-sync-button" id="bookDetailTitleSync" type="button" data-detail-action="refresh-titles">제목 불러오기</button>
-        <button class="detail-sort-button" id="bookDetailSort" type="button" data-detail-action="sort" aria-label="최신순으로 정렬">${icon('sort')}<span>첫 화부터</span></button>
+        <button class="detail-order-button" id="bookDetailOrder" type="button" data-detail-action="reorder">순서 편집</button>
+        <button class="detail-sort-button" id="bookDetailSort" type="button" data-detail-action="sort" aria-label="마지막 화부터 정렬">${icon('sort')}<span>첫 화부터</span></button>
       </div>
       <p class="detail-title-sync-status" id="bookDetailTitleSyncStatus" role="status" aria-live="polite" aria-atomic="true" hidden></p>
       <button class="detail-last-read" id="bookDetailLastRead" type="button" data-detail-action="jump" hidden>
@@ -110,8 +111,11 @@
   }
   function sameId(a, b) { return a != null && b != null && String(a) === String(b); }
   function chapterTitle(chapter) { return String(chapter?.title || chapter?.name || '제목 없는 회차'); }
-  function episodeNumber(chapter, index) {
-    return Number.isSafeInteger(chapter?.episodeNumber) && chapter.episodeNumber > 0 ? chapter.episodeNumber : index + 1;
+  function episodeNumber(chapter) {
+    // A non-numbered TXT is not automatically the Nth episode merely because
+    // it was imported Nth. The app supplies numeric metadata when recognizable.
+    return Number.isSafeInteger(chapter?.episodeNumber) && chapter.episodeNumber > 0
+      ? chapter.episodeNumber : null;
   }
   function timestamp(value) {
     const time = typeof value === 'number' ? value : Date.parse(value || '');
@@ -194,6 +198,7 @@
     $('bookDetailContinueChapter').textContent = book?.chapterName || (canRead ? chapterTitle(state.chapters.find(chapter => sameId(chapter.id, book.chapterId))) : '');
     $('bookDetailContinue').setAttribute('aria-label', (book?.hasRead ? '이어보기, ' : '첫 화 보기, ') + $('bookDetailContinueChapter').textContent);
     $('bookDetailSort').disabled = !state.ready || state.chapters.length < 2;
+    $('bookDetailOrder').disabled = !state.ready || state.chapters.length < 2;
     $('bookDetailSearchToggle').disabled = !state.ready || !state.chapters.length;
     renderTitleSync();
     renderRows();
@@ -267,7 +272,9 @@
     else row.button.removeAttribute('aria-current');
     row.button.setAttribute('aria-label', title + (isCurrent ? ', 읽던 회차, ' + Math.round(ratio * 100) + '%' : isRead ? ', 읽은 회차' : ', 읽기'));
     setCover(row.cover, state.book);
-    row.number.textContent = /^\s*\d+\s*화(?:\s|[:.·-]|$)/.test(title) ? '' : `${episodeNumber(chapter, index)}화`;
+    const number = episodeNumber(chapter);
+    row.number.textContent = number === null || /^\s*(?:제\s*)?\d+\s*(?:화|회)(?:\s|[:._·-]|$)/u.test(title)
+      ? '' : `${number}화`;
     row.name.textContent = title;
     row.meta.textContent = [formatSize(chapter.bytes), dateLabel(chapter.addedAt)].filter(Boolean).join(' · ');
     row.statusLabel.textContent = isCurrent ? '이어서' : isRead ? '다시 보기' : '읽기';
@@ -277,12 +284,16 @@
 
   function renderRows() {
     const query = searchQuery.trim().toLocaleLowerCase('ko');
-    let chapters = state.chapters.map((chapter, index) => ({ chapter, index })).filter(({ chapter, index }) => !query || chapterTitle(chapter).toLocaleLowerCase('ko').includes(query) || `${episodeNumber(chapter, index)}화`.includes(query));
+    let chapters = state.chapters.map((chapter, index) => ({ chapter, index })).filter(({ chapter }) => {
+      const number = episodeNumber(chapter);
+      return !query || chapterTitle(chapter).toLocaleLowerCase('ko').includes(query)
+        || (number !== null && `${number}화`.includes(query));
+    });
     if (latestFirst) chapters = chapters.reverse();
     const count = $('bookDetailResultCount');
     count.replaceChildren(document.createTextNode(query ? '검색 결과 ' : '전체 '), element('span', '', chapters.length.toLocaleString('ko-KR')), document.createTextNode('화'));
-    $('bookDetailSort').querySelector('span').textContent = latestFirst ? '최신순' : '첫 화부터';
-    $('bookDetailSort').setAttribute('aria-label', latestFirst ? '첫 화부터 정렬' : '최신순으로 정렬');
+    $('bookDetailSort').querySelector('span').textContent = latestFirst ? '마지막 화부터' : '첫 화부터';
+    $('bookDetailSort').setAttribute('aria-label', latestFirst ? '첫 화부터 정렬' : '마지막 화부터 정렬');
     const list = $('bookDetailEpisodeList');
     const keys = new Set();
     for (let position = 0; position < chapters.length; position++) {
@@ -419,6 +430,7 @@
     else if (action === 'clear-search') setSearch(false);
     else if (action === 'refresh-titles' && state.book) runAction('refreshTitles', state.book.name);
     else if (action === 'sort') { latestFirst = !latestFirst; renderRows(); }
+    else if (action === 'reorder' && state.book) runAction('reorderChapters', state.book.name);
     else if (action === 'episodes-tab' || action === 'info-tab') {
       selectedTab = action === 'episodes-tab' ? 'episodes' : 'info';
       updateTab();

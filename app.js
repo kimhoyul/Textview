@@ -82,6 +82,10 @@
   let newTXTOrigin = '';
   let newTXTInitial = null;
   let renameBookReturnToLibrary = false;
+  let chapterOrderEditing = false;
+  let chapterOrderMoveId = null;
+  let chapterOrderSaving = false;
+  let chapterOrderMessage = '';
 
   // Reading state is synchronously mirrored to localStorage, then persisted to
   // IndexedDB. The synchronous copy also handles a mobile process being suspended.
@@ -172,8 +176,36 @@
 
   function chapterId(book, name) { return JSON.stringify([book.normalize('NFC'), name.normalize('NFC')]); }
   function cleanName(name) { return name.replace(/\.txt$/i, ''); }
-  function compareFiles(a, b) { return collator.compare(a.name, b.name); }
-  function inBook(book) { return chapters.filter(chapter => chapter.book === book).sort(compareFiles); }
+  function chapterSortNumber(chapter) {
+    const model = window.TextviewEpisodeTitleModel;
+    const known = model?.numberFor(chapter.name, chapter.book) ?? model?.namedFor(chapter.name)?.number ?? null;
+    if (known !== null) return known;
+    // Display/order-only fallback for filenames such as "1화_프롤로그.txt".
+    const stem = chapter.name.normalize('NFC').replace(/\.txt$/i, '').trim();
+    const match = /^(?:제\s*)?([0-9]{1,6})\s*(?:화|회)?(?:$|[\s._:-])/u.exec(stem);
+    const number = match ? Number(match[1]) : null;
+    return number !== null && number >= 1 && number <= 10000 ? number : null;
+  }
+  function compareFiles(a, b) {
+    const first = chapterSortNumber(a), second = chapterSortNumber(b);
+    if (first !== null && second !== null && first !== second) return first - second;
+    return collator.compare(a.name, b.name);
+  }
+  function storedChapterOrder(book) {
+    const saved = memoryState.get('chapter-order:' + book)?.value;
+    if (!Array.isArray(saved?.ids) || saved.ids.length > 20000 ||
+        saved.ids.some(id => typeof id !== 'string') || new Set(saved.ids).size !== saved.ids.length) return null;
+    return saved.ids;
+  }
+  function inBook(book) {
+    const list = chapters.filter(chapter => chapter.book === book).sort(compareFiles);
+    const saved = storedChapterOrder(book);
+    if (!saved) return list;
+    const lookup = new Map(list.map(chapter => [chapter.id, chapter]));
+    const ordered = saved.map(id => lookup.get(id)).filter(Boolean);
+    const placed = new Set(ordered.map(chapter => chapter.id));
+    return ordered.concat(list.filter(chapter => !placed.has(chapter.id)));
+  }
   function clamp(value, min, max, fallback) {
     if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
     return Math.min(max, Math.max(min, value));
@@ -1088,7 +1120,7 @@
     const book = bookModel(detailBookName);
     window.TextviewBookDetail.render({ book,
       chapters: inBook(detailBookName).map(chapter => ({
-        id: chapter.id, name: chapter.name, title: displayChapterTitle(chapter), episodeNumber: episodeNumber(chapter),
+        id: chapter.id, name: chapter.name, title: displayChapterTitle(chapter), episodeNumber: chapterSortNumber(chapter),
         bytes: chapter.bytes, encoding: chapter.encoding, addedAt: chapter.addedAt,
         ratio: ratioOf(chapter.id),
         hasRead: !!readState('position:' + chapter.id, null) || (book?.hasRead && chapter.id === book.chapterId),
@@ -1528,10 +1560,61 @@
   function renderChapterList() {
     const book = $('bookSelect').value;
     const list = inBook(book);
+    const positions = new Map(list.map((chapter, index) => [chapter.id, index]));
     const search = $('chapterSearch').value.trim().toLocaleLowerCase();
     const fragment = document.createDocumentFragment();
     const shown = list.filter(chapter => (chapter.name + ' ' + displayChapterTitle(chapter, true)).toLocaleLowerCase().includes(search));
     for (const chapter of shown) {
+      if (chapterOrderEditing) {
+        const position = positions.get(chapter.id);
+        const row = document.createElement('div');
+        row.className = 'chapter-order-row';
+        const label = document.createElement('span');
+        label.className = 'chapter-order-label';
+        label.textContent = (position + 1) + '번째 · ' + displayChapterTitle(chapter, true);
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'chapter-order-change';
+        edit.textContent = '위치 이동';
+        edit.disabled = busy || chapterOrderSaving;
+        edit.setAttribute('aria-label', displayChapterTitle(chapter, true) + ' 순서 이동');
+        edit.addEventListener('click', () => {
+          chapterOrderMoveId = chapter.id;
+          chapterOrderMessage = '';
+          renderChapterList();
+          $('chapterOrderPosition')?.focus({ preventScroll: true });
+          $('chapterOrderPosition')?.select();
+        });
+        row.append(label, edit);
+        if (chapterOrderMoveId === chapter.id) {
+          const form = document.createElement('form');
+          form.className = 'chapter-order-move';
+          const targetLabel = document.createElement('label');
+          targetLabel.htmlFor = 'chapterOrderPosition';
+          targetLabel.textContent = '이동할 위치 (1~' + list.length + ')';
+          const input = document.createElement('input');
+          input.id = 'chapterOrderPosition';
+          input.type = 'number';
+          input.inputMode = 'numeric';
+          input.min = '1';
+          input.max = String(list.length);
+          input.step = '1';
+          input.value = String(position + 1);
+          input.required = true;
+          const apply = document.createElement('button');
+          apply.type = 'submit';
+          apply.textContent = '적용';
+          apply.disabled = busy || chapterOrderSaving;
+          form.append(targetLabel, input, apply);
+          form.addEventListener('submit', event => {
+            event.preventDefault();
+            void moveChapterOrder(book, chapter.id, input.value);
+          });
+          row.appendChild(form);
+        }
+        fragment.appendChild(row);
+        continue;
+      }
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'chapter-row';
@@ -1554,13 +1637,111 @@
       note.textContent = '표시할 TXT가 없습니다.';
       fragment.appendChild(note);
     }
-    $('chapterList').replaceChildren(fragment);
+    const chapterListElement = $('chapterList');
+    const previousScroll = chapterListElement.scrollTop;
+    chapterListElement.replaceChildren(fragment);
+    chapterListElement.scrollTop = previousScroll;
+    $('chapterOrderToggle').disabled = busy || chapterOrderSaving || list.length < 2;
+    $('chapterOrderToggle').textContent = chapterOrderEditing ? '편집 완료' : '순서 편집';
+    $('chapterOrderReset').hidden = !chapterOrderEditing || !storedChapterOrder(book);
+    $('chapterOrderReset').disabled = busy || chapterOrderSaving;
+    $('chapterOrderMessage').textContent = chapterOrderMessage || (chapterOrderEditing ? '회차의 위치 이동을 눌러 원하는 순서를 지정하세요.' : '');
     $('librarySummary').textContent = '저장된 TXT ' + list.length + '개 · ' + formatBytes(list.reduce((sum, item) => sum + item.bytes, 0));
     $('deleteBookBtn').disabled = busy || list.length === 0;
     $('renameBookBtn').disabled = busy || list.length === 0;
     $('newTXTInBookBtn').disabled = busy || list.length === 0;
     $('addToBookBtn').hidden = !shelfActive;
   }
+
+  function persistChapterOrder(book, ids = null) {
+    if (!db || !inBook(book).length) return Promise.reject(new Error('회차를 다시 불러온 뒤 시도해 주세요.'));
+    const currentIds = inBook(book).map(chapter => chapter.id);
+    const expected = ids || currentIds;
+    const currentSet = new Set(currentIds);
+    if (!Array.isArray(expected) || expected.length !== currentIds.length ||
+        new Set(expected).size !== expected.length || expected.some(id => !currentSet.has(id)))
+      return Promise.reject(new Error('회차 목록이 변경되었습니다. 다시 시도해 주세요.'));
+    const key = 'chapter-order:' + book;
+    const record = ids ? { key, value: { ids: [...ids] }, updatedAt: Date.now() } : null;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(['chapters', 'state'], 'readwrite');
+      let reason = null;
+      const request = tx.objectStore('chapters').index('book').getAll(book);
+      request.onsuccess = () => {
+        const actual = request.result;
+        const expectedIds = new Set(expected);
+        if (actual.length !== expected.length || actual.some(chapter => !expectedIds.has(chapter.id))) {
+          reason = new Error('다른 창에서 회차가 변경되었습니다. 보관함을 다시 열어 주세요.');
+          tx.abort();
+          return;
+        }
+        if (record) tx.objectStore('state').put(record);
+        else tx.objectStore('state').delete(key);
+      };
+      tx.oncomplete = () => {
+        if (record) memoryState.set(key, record);
+        else memoryState.delete(key);
+        resolve();
+      };
+      tx.onabort = () => reject(reason || tx.error || new Error('회차 순서를 저장하지 못했습니다.'));
+      tx.onerror = () => {};
+    });
+  }
+
+  async function moveChapterOrder(book, id, destination) {
+    if (busy || chapterOrderSaving || !chapterOrderEditing || !db) return;
+    const list = inBook(book);
+    const oldIndex = list.findIndex(item => item.id === id);
+    const target = Number(destination);
+    if (oldIndex < 0 || !Number.isSafeInteger(target) || target < 1 || target > list.length) {
+      chapterOrderMessage = '1부터 ' + list.length + '까지의 위치를 입력해 주세요.';
+      $('chapterOrderMessage').textContent = chapterOrderMessage;
+      return;
+    }
+    chapterOrderMoveId = null;
+    if (oldIndex === target - 1) { renderChapterList(); return; }
+    const ids = list.map(item => item.id);
+    ids.splice(oldIndex, 1);
+    ids.splice(target - 1, 0, id);
+    chapterOrderSaving = true;
+    chapterOrderMessage = '순서를 저장하는 중…';
+    renderChapterList();
+    try {
+      await persistChapterOrder(book, ids);
+      chapterOrderMessage = target + '번째로 이동했습니다.';
+      renderHome();
+      updateNavigation();
+    } catch (error) { chapterOrderMessage = explainError(error); }
+    finally { chapterOrderSaving = false; renderChapterList(); }
+  }
+
+  async function resetChapterOrder() {
+    if (busy || chapterOrderSaving || !db) return;
+    const book = $('bookSelect').value;
+    if (!storedChapterOrder(book)) return;
+    chapterOrderSaving = true;
+    chapterOrderMessage = '회차 번호순으로 복원하는 중…';
+    renderChapterList();
+    try {
+      await persistChapterOrder(book, null);
+      chapterOrderMoveId = null;
+      chapterOrderMessage = '회차 번호순으로 복원했습니다.';
+      renderHome();
+      updateNavigation();
+    } catch (error) { chapterOrderMessage = explainError(error); }
+    finally { chapterOrderSaving = false; renderChapterList(); }
+  }
+
+  function openChapterOrder(book) {
+    if (!db || busy || editingReader || switching) return;
+    openLibrary(book);
+    if (!$('libraryDialog').open) return;
+    chapterOrderEditing = true;
+    chapterOrderMoveId = null;
+    chapterOrderMessage = '';
+    renderChapterList();
+  }
+
   function openImport(book) {
     if (editingReader || !db || busy || switching || suppressPosition) return;
     if (!shelfActive) {
@@ -1788,7 +1969,7 @@
   function renameStoredBook(oldName, newName, originalChapters) {
     const idMap = new Map(originalChapters.map(chapter => [chapter.id, chapterId(newName, chapter.name)]));
     const byOldId = new Map(originalChapters.map(chapter => [chapter.id, chapter]));
-    const bookKeys = ['cover:', 'episode-titles:', 'nas-origin:', 'lastBook:'];
+    const bookKeys = ['cover:', 'episode-titles:', 'nas-origin:', 'lastBook:', 'chapter-order:'];
     const oldStateKeys = [
       ...originalChapters.flatMap(chapter => ['position:' + chapter.id, 'bookmark:' + chapter.id]),
       ...bookKeys.map(prefix => prefix + oldName)
@@ -1868,6 +2049,8 @@
           }
           for (const prefix of ['cover:', 'episode-titles:', 'nas-origin:'])
             moveState(prefix + oldName, prefix + newName);
+          moveState('chapter-order:' + oldName, 'chapter-order:' + newName,
+            value => Array.isArray(value?.ids) ? { ids: value.ids.map(id => idMap.get(id)).filter(Boolean) } : undefined);
           moveState('lastBook:' + oldName, 'lastBook:' + newName,
             id => idMap.get(id));
           moveState('last', 'last', id => idMap.get(id));
@@ -2006,6 +2189,7 @@
         tx.objectStore('state').delete('cover:' + book);
         tx.objectStore('state').delete('episode-titles:' + book);
         tx.objectStore('state').delete('nas-origin:' + book);
+        tx.objectStore('state').delete('chapter-order:' + book);
         tx.oncomplete = resolve;
         tx.onabort = () => reject(tx.error);
         tx.onerror = () => {};
@@ -2019,6 +2203,7 @@
       memoryState.delete('cover:' + book);
       memoryState.delete('episode-titles:' + book);
       memoryState.delete('nas-origin:' + book);
+      memoryState.delete('chapter-order:' + book);
       pendingNASNames.delete(book);
       nasNameRetryAfter.delete(book);
       episodeTitleJobs.delete(book);
@@ -2084,6 +2269,11 @@
         if (window.TextviewEpisodeTitleModel?.normalize(value)) episodeTitles.push({ book, ...value });
       }
       if (episodeTitles.length) payload.episodeTitles = episodeTitles;
+      const chapterOrders = [];
+      for (const book of new Set(chapters.map(chapter => chapter.book))) {
+        if (storedChapterOrder(book)) chapterOrders.push({ book, ids: inBook(book).map(chapter => chapter.id) });
+      }
+      if (chapterOrders.length) payload.chapterOrders = chapterOrders;
       const filename = '호율-시리즈-책장-백업-' + new Date().toISOString().slice(0, 10) + '.json';
       backupFile = new File([JSON.stringify(payload)], filename, { type: 'application/json' });
       if (backupURL) URL.revokeObjectURL(backupURL);
@@ -2129,6 +2319,27 @@
           restoredCovers.set(book, value);
         }
       }
+      const restoredOrders = new Map();
+      if (payload.chapterOrders !== undefined) {
+        if (!Array.isArray(payload.chapterOrders) || payload.chapterOrders.length > validBooks.size)
+          throw new Error('백업의 회차 순서 목록이 올바르지 않습니다.');
+        for (const entry of payload.chapterOrders) {
+          if (typeof entry?.book !== 'string' || !entry.book.trim() || !Array.isArray(entry.ids) ||
+              entry.ids.length < 1 || entry.ids.length > 20000) throw new Error('백업의 회차 순서가 올바르지 않습니다.');
+          const book = entry.book.trim().normalize('NFC');
+          if (!validBooks.has(book) || restoredOrders.has(book) || new Set(entry.ids).size !== entry.ids.length)
+            throw new Error('백업의 회차 순서에 중복되거나 알 수 없는 작품이 있습니다.');
+          for (const id of entry.ids) {
+            if (typeof id !== 'string') throw new Error('백업의 회차 저장 ID가 올바르지 않습니다.');
+            let parts;
+            try { parts = JSON.parse(id); } catch { throw new Error('백업의 회차 저장 ID가 올바르지 않습니다.'); }
+            if (!Array.isArray(parts) || parts.length !== 2 || parts[0] !== book ||
+                typeof parts[1] !== 'string' || !parts[1] || id !== chapterId(book, parts[1]))
+              throw new Error('백업의 회차 저장 ID가 올바르지 않습니다.');
+          }
+          restoredOrders.set(book, entry.ids);
+        }
+      }
       const restoredTitles = new Map();
       if (payload.episodeTitles !== undefined) {
         if (!Array.isArray(payload.episodeTitles) || payload.episodeTitles.length > validBooks.size) throw new Error('백업의 회차 제목 목록이 올바르지 않습니다.');
@@ -2141,6 +2352,7 @@
         }
       }
       const wasEmpty = chapters.length === 0;
+      const previouslyPresentBooks = new Set(chapters.map(chapter => chapter.book));
       const availableBooks = new Set(chapters.map(chapter => chapter.book));
       const known = new Set(chapters.map(chapter => chapter.id));
       for (const item of payload.chapters) {
@@ -2177,6 +2389,16 @@
         const record = { key, value, updatedAt: Date.now() };
         await dbRequest('state', 'put', record);
         memoryState.set(key, record);
+      }
+      for (const [book, ids] of restoredOrders) {
+        // Do not replace an existing user's ordering when importing backup
+        // chapters into a book already present on this device.
+        if (!availableBooks.has(book) || previouslyPresentBooks.has(book)) continue;
+        const applicable = ids.filter(id => known.has(id));
+        if (!applicable.length) continue;
+        const record = { key: 'chapter-order:' + book, value: { ids: applicable }, updatedAt: Date.now() };
+        await dbRequest('state', 'put', record);
+        memoryState.set(record.key, record);
       }
       if (wasEmpty) {
         settings = normalizeSettings(payload.settings);
@@ -2331,7 +2553,8 @@
   };
   if (window.TextviewNAS) window.TextviewNAS.actions = { showHome, showShelf, importDownloaded, nasIdle, nasConnected, nasFolderLoaded, notify: showToast };
   if (window.TextviewBookDetail) window.TextviewBookDetail.actions = {
-    back: backFromBookDetail, openChapter, notify: showToast, refreshTitles: book => updateEpisodeTitles(book, true)
+    back: backFromBookDetail, openChapter, notify: showToast, refreshTitles: book => updateEpisodeTitles(book, true),
+    reorderChapters: openChapterOrder
   };
   if (window.TextviewCoverPicker) window.TextviewCoverPicker.actions = {
     back: showShelf, selectFile: selectCoverFile, useDefault: useDefaultCover,
@@ -2350,7 +2573,24 @@
     layoutWillChange: readerLayoutWillChange, layoutChanged: readerLayoutChanged,
     notify: showToast
   };
-  $('bookSelect').addEventListener('change', renderChapterList);
+  $('bookSelect').addEventListener('change', () => {
+    chapterOrderMoveId = null;
+    chapterOrderMessage = '';
+    renderChapterList();
+  });
+  $('chapterOrderToggle').addEventListener('click', () => {
+    if (busy || chapterOrderSaving) return;
+    chapterOrderEditing = !chapterOrderEditing;
+    chapterOrderMoveId = null;
+    chapterOrderMessage = '';
+    renderChapterList();
+  });
+  $('chapterOrderReset').addEventListener('click', () => { void resetChapterOrder(); });
+  $('libraryDialog').addEventListener('close', () => {
+    chapterOrderEditing = false;
+    chapterOrderMoveId = null;
+    chapterOrderMessage = '';
+  });
   $('chapterSearch').addEventListener('input', renderChapterList);
   $('addToBookBtn').addEventListener('click', () => {
     const book = $('bookSelect').value;
