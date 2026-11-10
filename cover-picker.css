@@ -73,6 +73,29 @@ html:has(body.cover-visible)::-webkit-scrollbar { display: none; }
 .book-manager-order-status { min-height: 20px; margin: 8px 0 6px !important; color: #d8bbed; font-size: 12px; line-height: 1.5; }
 .book-manager-chapter-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid #39353d; }
 .book-manager-chapter-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 0; border-bottom: 1px solid #39353d; }
+.cover-picker-screen .book-manager-chapter-menu-trigger { flex: 0 0 44px; width: 44px; min-height: 44px; border: 1px solid transparent; border-radius: 10px; color: #e1d4ef; font-size: 27px; line-height: 1; }
+.cover-picker-screen .book-manager-chapter-menu-trigger[aria-expanded="true"] { border-color: #6e6080; background: #2c2734; color: #e8d5ff; }
+.book-manager-chapter-actions { flex: 1 0 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 5px 0; padding: 10px 8px; border: 1px solid #4c4259; border-radius: 12px; background: #24202b; }
+.cover-picker-screen .book-manager-chapter-actions button { display: inline-flex; justify-content: center; align-items: center; min-width: 0; min-height: 44px; padding: 8px 6px; border-radius: 8px; border: 1px solid #53485e; background: #322b3a; font-size: 13px; line-height: 1.35; color: #ece1f6; }
+.cover-picker-screen .book-manager-chapter-actions .book-manager-chapter-delete { border-color: #815862; color: #f5b8c5; background: #3a292f; }
+.book-manager-delete-dialog { width: min(420px, calc(100vw - 34px)); max-height: min(90dvh, 620px); margin: auto; padding: 23px; border: 1px solid #73637d; border-radius: 18px; background: #24202b; color: #f2edf8; box-shadow: 0 25px 65px rgba(0,0,0,.55); overflow-y: auto; }
+.book-manager-delete-dialog::backdrop { background: rgba(0,0,0,.75); }
+.book-manager-delete-dialog h2 { margin: 0 0 14px; font-size: 20px; font-weight: 700; }
+.book-manager-delete-dialog p { margin: 0 0 12px !important; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.book-manager-delete-name { font-weight: 700; color: #eddefa; }
+.book-manager-delete-last { color: #f5b7c1; font-weight: 650; }
+.book-manager-delete-nas { color: #bbb4c3; }
+.book-manager-delete-error:not(:empty) { color: #f5b7c1; }
+.book-manager-delete-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 20px; }
+.cover-picker-screen .book-manager-delete-buttons button { min-height: 47px; padding: 8px 10px; border: 1px solid #716779; border-radius: 10px; background: #342e3c; color: #f1eafa; font-size: 15px; font-weight: 650; }
+.cover-picker-screen .book-manager-delete-buttons #bookManagerDeleteConfirm { border-color: #a46878; background: #9f445a; color: #fff; }
+@media (max-width: 375px) {
+  .book-manager-chapter-row { gap: 7px; }
+  .book-manager-chapter-info { flex-basis: 115px; }
+  .book-manager-chapter-actions { gap: 5px; padding: 8px 5px; }
+  .cover-picker-screen .book-manager-chapter-actions button { font-size: 12px; }
+}
+
 .book-manager-chapter-info { display: flex; flex: 1 1 170px; min-width: 0; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
 .book-manager-chapter-rank { color: #c5acee; font-size: 12px; }
 .book-manager-chapter-name { color: #f4f1f8; font-size: 14px; line-height: 1.5; }

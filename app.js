@@ -1155,6 +1155,174 @@
     return { renamed: true, name, id: result.newId };
   }
 
+
+  // Only the selected local chapter is removed. No Synology or external files
+  // are contacted. The entire delete and state reconciliation is atomic.
+  function deleteManagedChapterFromDB(book, id, expectedName, expectedIds) {
+    const remaining = expectedIds.filter(item => item !== id);
+    const keys = ['position:' + id, 'bookmark:' + id, 'last', 'lastBook:' + book, 'chapter-order:' + book];
+    const snapshots = new Map();
+    for (const key of keys) {
+      readState(key, null);
+      if (memoryState.has(key)) snapshots.set(key, memoryState.get(key));
+    }
+    const updated = new Map(), removed = new Set(['position:' + id, 'bookmark:' + id]);
+    const latest = (key, stored) => {
+      const cached = snapshots.get(key);
+      return cached && (!stored || (cached.updatedAt || 0) > (stored.updatedAt || 0)) ? cached : stored;
+    };
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(['chapters', 'texts', 'state'], 'readwrite');
+      const metaStore = tx.objectStore('chapters');
+      const texts = tx.objectStore('texts');
+      const stateStore = tx.objectStore('state');
+      let cause = null;
+      const stop = message => { if (!cause) { cause = new Error(message); tx.abort(); } };
+      const set = (key, value, previous) => {
+        const record = { key, value, updatedAt: Math.max(Date.now(), (previous?.updatedAt || 0) + 1) };
+        stateStore.put(record);
+        updated.set(key, record);
+      };
+      const moveIfCurrent = (key, fallbackId, deleteIfEmpty = false) => {
+        const request = stateStore.get(key);
+        request.onsuccess = () => {
+          const record = latest(key, request.result);
+          if (deleteIfEmpty) {
+            stateStore.delete(key);
+            removed.add(key);
+          } else if (record?.value === id) {
+            set(key, fallbackId, record);
+          }
+        };
+      };
+      tx.oncomplete = () => resolve({ bookDeleted: remaining.length === 0, updated, removed });
+      tx.onabort = () => reject(cause || tx.error || new Error('TXT 삭제를 완료하지 못했습니다. 기존 회차는 유지됩니다.'));
+      tx.onerror = () => {};
+      const listing = metaStore.index('book').getAll(book);
+      listing.onsuccess = () => {
+        const actual = listing.result;
+        const known = new Set(expectedIds);
+        if (actual.length !== expectedIds.length || known.size !== expectedIds.length ||
+            actual.some(entry => !known.has(entry.id)) ||
+            !actual.some(entry => entry.id === id && entry.name === expectedName)) {
+          stop('다른 창에서 책 내용이 변경되었습니다. 작품 관리를 다시 열어 주세요.');
+          return;
+        }
+        const textRequest = texts.get(id);
+        textRequest.onsuccess = () => {
+          if (typeof textRequest.result?.text !== 'string') {
+            stop('저장된 본문을 확인하지 못했습니다. 삭제를 중단했습니다.');
+            return;
+          }
+          metaStore.delete(id);
+          texts.delete(id);
+          stateStore.delete('position:' + id);
+          stateStore.delete('bookmark:' + id);
+          // Preserve a sensible next-reading target without leaving stale IDs.
+          moveIfCurrent('last', remaining[0] || null);
+          moveIfCurrent('lastBook:' + book, remaining[0] || null, remaining.length === 0);
+          const orderReq = stateStore.get('chapter-order:' + book);
+          orderReq.onsuccess = () => {
+            const current = latest('chapter-order:' + book, orderReq.result);
+            if (!remaining.length) {
+              stateStore.delete('chapter-order:' + book);
+              removed.add('chapter-order:' + book);
+              for (const key of ['cover:', 'episode-titles:', 'nas-origin:']) {
+                stateStore.delete(key + book);
+                removed.add(key + book);
+              }
+            } else if (Array.isArray(current?.value?.ids)) {
+              const keep = new Set(remaining);
+              const ids = current.value.ids.filter(value => keep.delete(value));
+              ids.push(...remaining.filter(value => keep.has(value)));
+              set('chapter-order:' + book, { ...current.value, ids }, current);
+            }
+          };
+        };
+      };
+    });
+  }
+
+  async function deleteManagedChapter(book, id) {
+    if (!coverActive || coverBookName !== book || busy || coverProcessing || !db || editingReader || switching)
+      throw new Error('작품 관리 화면에서 다시 시도해 주세요.');
+    const list = inBook(book);
+    const selected = list.find(entry => entry.id === id);
+    if (!selected) throw new Error('해당 TXT가 없습니다. 다시 목록을 확인해 주세요.');
+    const lastChapter = list.length === 1;
+    // A modal with the filename and explicit destructive warning must be shown
+    // by the caller before arriving here. Do not use a second generic confirm.
+    setBusy(true);
+    let committed = false;
+    try {
+      const result = await deleteManagedChapterFromDB(book, id, selected.name, list.map(entry => entry.id));
+      committed = true;
+      for (const key of result.removed) {
+        memoryState.delete(key);
+        try { localStorage.removeItem(PREFIX + key); } catch {}
+      }
+      for (const [key, record] of result.updated) {
+        memoryState.set(key, record);
+        if (key === 'last' || key.startsWith('lastBook:')) {
+          try { localStorage.setItem(PREFIX + key, JSON.stringify(record)); } catch {}
+        }
+      }
+      try {
+        if (sessionStorage.getItem(PREFIX + 'returnToReader') === id)
+          sessionStorage.removeItem(PREFIX + 'returnToReader');
+      } catch {}
+      if (current?.id === id) {
+        current = null;
+        readingActive = false;
+        clearTimeout(positionTimer);
+        $('reader').textContent = '';
+        $('reader').dataset.chapterId = '';
+        $('reader').hidden = true;
+      }
+      episodeTitleGeneration.set(book, (episodeTitleGeneration.get(book) || 0) + 1);
+      episodeTitleJobs.delete(book);
+      pendingNASNames.delete(book);
+      nasNameRetryAfter.delete(book);
+      pendingNASUploads.delete(book);
+      nasUploadCheckedAt.delete(book);
+      nasUploadFailureNotified.delete(book);
+      if (lastChapter) {
+        episodeTitleStatus.delete(book);
+        episodeTitleRetryAfter.delete(book);
+        sharedCoverOrigins.delete(book);
+        sharedCoverCheckedAt.delete(book);
+        const existingCover = coverURLs.get(book);
+        if (existingCover) {
+          coverURLs.delete(book);
+          requestAnimationFrame(() => URL.revokeObjectURL(existingCover.url));
+        }
+      }
+      await refreshChapters();
+      if (result.bookDeleted) {
+        hideCoverPicker();
+        setBusy(false); // showShelf requires the global busy flag to be clear.
+        showShelf();
+        showToast('마지막 TXT를 삭제해 작품이 보관함에서 사라졌습니다. NAS 원본은 유지됩니다.');
+      } else {
+        renderCoverPicker();
+        showToast('선택한 TXT를 앱 보관함에서 삭제했습니다. NAS 원본은 유지됩니다.');
+      }
+      return result;
+    } catch (error) {
+      if (committed) {
+        // A post-commit UI failure is not a failed delete; do not invite retry.
+        try { await refreshChapters(); } catch {}
+        throw new Error('TXT는 삭제됐지만 화면 갱신에 실패했습니다. 앱을 다시 열어 확인해 주세요.');
+      }
+      throw error;
+    } finally {
+      setBusy(false);
+      // The combined manager's availability is based on the global busy flag.
+      // Re-enable controls after both successful and failed deletes.
+      if (coverActive && coverBookName === book) renderCoverPicker();
+    }
+  }
+
   async function saveManagedChapterOrder(book, ids = null) {
     if (!coverActive || coverBookName !== book || busy || coverProcessing || !db) {
       throw new Error('작품 관리 화면에서 다시 시도해 주세요.');
@@ -2760,6 +2928,7 @@
     save: saveCover, openBook: readFromCoverManager, search: searchCovers,
     chooseResult: selectSearchCover,
     renameChapterFile: (book, id, name) => renameManagedChapterFile(book, id, name),
+    deleteChapter: (book, id) => deleteManagedChapter(book, id),
     saveOrder: (book, ids) => saveManagedChapterOrder(book, ids),
     resetOrder: book => saveManagedChapterOrder(book, null),
     newTXT: book => navigateCoverManager('new', book),

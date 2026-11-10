@@ -94,6 +94,18 @@
         <button type="button" data-cover-action="files">백업·삭제 등 관리</button>
       </div>
     </section>
+    <dialog id="bookManagerDeleteDialog" class="book-manager-delete-dialog" aria-labelledby="bookManagerDeleteTitle" aria-describedby="bookManagerDeleteDescription">
+      <h2 id="bookManagerDeleteTitle">TXT 삭제</h2>
+      <p id="bookManagerDeleteName" class="book-manager-delete-name"></p>
+      <p id="bookManagerDeleteDescription">이 회차와 직접 수정한 본문, 읽기 기록 및 책갈피를 앱 보관함에서 삭제합니다. 백업이 없다면 복원하기 어렵습니다.</p>
+      <p id="bookManagerDeleteLast" class="book-manager-delete-last" hidden>마지막 TXT를 삭제하면 이 책도 보관함에서 사라집니다.</p>
+      <p class="book-manager-delete-nas">NAS와 파일 앱에 있는 원본 파일은 삭제하지 않습니다.</p>
+      <p id="bookManagerDeleteError" class="book-manager-delete-error" role="alert"></p>
+      <div class="book-manager-delete-buttons">
+        <button id="bookManagerDeleteCancel" type="button">취소</button>
+        <button id="bookManagerDeleteConfirm" type="button">TXT 삭제</button>
+      </div>
+    </dialog>
     <input id="coverPickerFile" class="cover-picker-visually-hidden" type="file" accept="image/*" tabindex="-1" aria-label="책 표지 이미지 파일">
   `;
   document.body.appendChild(screen);
@@ -112,6 +124,8 @@
   let chapterVisibleLimit = 100;
   let editingFilenameId = null;
   let filenameDraft = '';
+  let selectedMenuId = null;
+  let deleteTargetId = null;
   let dragState = null;
   const api = { actions: {}, render, show, hide, setDraft, setStatus, setSearch, setTab, hasUnsavedFilenameEdit };
   window.TextviewCoverPicker = api;
@@ -148,6 +162,7 @@
     if (!state.book || typeof state.book.name !== 'string') state.book = null;
     if (previousName !== state.book?.name) {
       selectedMoveId = null;
+      selectedMenuId = null;
       editingFilenameId = null;
       filenameDraft = '';
       chapterSearch = '';
@@ -197,7 +212,7 @@
   function setTab(tab) {
     if (!['cover', 'chapters'].includes(tab) || orderBusy || dragState) return;
     if (selectedTab !== tab && !clearFilenameEdit()) return;
-    if (selectedTab !== tab) selectedMoveId = null;
+    if (selectedTab !== tab) { selectedMoveId = null; selectedMenuId = null; }
     selectedTab = tab;
     for (const [name, tabId, panelId] of [
       ['cover', 'bookManagerCoverTab', 'coverPickerCoverPanel'],
@@ -238,41 +253,72 @@
       const name = createElement('span', 'book-manager-chapter-name', title);
       const filename = createElement('span', 'book-manager-chapter-filename', chapter.name);
       info.append(rank, name, filename);
-      const move = createElement('button', 'book-manager-chapter-move', '위치 이동');
-      move.type = 'button';
-      move.disabled = !state.ready || state.busy || orderBusy;
-      move.setAttribute('aria-label', title + ' 순서 변경');
-      move.addEventListener('click', () => {
-        if (dragState || !clearFilenameEdit()) return;
-        selectedMoveId = chapter.id;
-        orderStatus = '';
-        renderChapters();
-        const field = document.getElementById('bookManagerMovePosition');
-        field?.focus({ preventScroll: true });
-        field?.select();
-      });
-      const rename = createElement('button', 'book-manager-chapter-rename', '이름 수정');
-      rename.type = 'button';
-      rename.disabled = !state.ready || state.busy || orderBusy;
-      rename.setAttribute('aria-label', title + ' TXT 파일명 수정');
-      rename.addEventListener('click', () => {
-        if (dragState || orderBusy || !clearFilenameEdit()) return;
-        selectedMoveId = null;
-        editingFilenameId = chapter.id;
-        filenameDraft = chapter.name.replace(/\.txt$/i, '');
-        orderStatus = '';
-        renderChapters();
-        const input = document.getElementById('bookManagerFilenameInput');
-        input?.focus({ preventScroll: true });
-        input?.select();
-      });
+
       const grip = createElement('button', 'book-manager-drag-handle', '⠿');
       grip.type = 'button';
       grip.disabled = !state.ready || state.busy || orderBusy || !!query;
       grip.setAttribute('aria-label', title + ' 손잡이를 끌어서 순서 이동');
       grip.title = query ? '검색을 지우면 드래그할 수 있습니다.' : '끌어서 순서 이동';
       grip.addEventListener('pointerdown', event => startChapterDrag(event, chapter.id, row, grip));
-      row.append(info, rename, move, grip);
+      const menu = createElement('button', 'book-manager-chapter-menu-trigger', '⋮');
+      menu.type = 'button';
+      menu.disabled = !state.ready || state.busy || orderBusy;
+      const isOpen = selectedMenuId === chapter.id;
+      const menuId = 'bookManagerMenu-' + index;
+      menu.setAttribute('aria-label', title + ' 회차 관리 메뉴');
+      menu.setAttribute('aria-haspopup', 'true');
+      menu.setAttribute('aria-expanded', String(isOpen));
+      menu.setAttribute('aria-controls', menuId);
+      menu.addEventListener('click', () => {
+        if (dragState || orderBusy) return;
+        if (editingFilenameId && !clearFilenameEdit()) return;
+        selectedMoveId = null;
+        selectedMenuId = selectedMenuId === chapter.id ? null : chapter.id;
+        orderStatus = '';
+        renderChapters();
+      });
+      row.append(grip, info, menu);
+      if (isOpen) {
+        const actions = createElement('div', 'book-manager-chapter-actions');
+        actions.id = menuId;
+        actions.setAttribute('role', 'group');
+        actions.setAttribute('aria-label', title + ' 회차 관리');
+        const editName = createElement('button', 'book-manager-chapter-rename', '이름 수정');
+        editName.type = 'button';
+        editName.disabled = !state.ready || state.busy || orderBusy;
+        editName.addEventListener('click', () => {
+          if (dragState || orderBusy || !clearFilenameEdit()) return;
+          selectedMenuId = null;
+          selectedMoveId = null;
+          editingFilenameId = chapter.id;
+          filenameDraft = chapter.name.replace(/\.txt$/i, '');
+          orderStatus = '';
+          renderChapters();
+          const input = document.getElementById('bookManagerFilenameInput');
+          input?.focus({ preventScroll: true });
+          input?.select();
+        });
+        const move = createElement('button', 'book-manager-chapter-move', '위치 이동');
+        move.type = 'button';
+        move.disabled = !state.ready || state.busy || orderBusy;
+        move.addEventListener('click', () => {
+          if (dragState || !clearFilenameEdit()) return;
+          selectedMenuId = null;
+          selectedMoveId = chapter.id;
+          orderStatus = '';
+          renderChapters();
+          const field = document.getElementById('bookManagerMovePosition');
+          field?.focus({ preventScroll: true });
+          field?.select();
+        });
+        const remove = createElement('button', 'book-manager-chapter-delete', '삭제');
+        remove.type = 'button';
+        remove.disabled = !state.ready || state.busy || orderBusy;
+        remove.setAttribute('aria-label', title + ' TXT 삭제');
+        remove.addEventListener('click', () => openDeleteConfirm(chapter.id));
+        actions.append(editName, move, remove);
+        row.appendChild(actions);
+      }
       if (editingFilenameId === chapter.id) {
         const form = createElement('form', 'book-manager-filename-form');
         const inputLabel = createElement('label', 'book-manager-filename-label', '저장할 TXT 파일명');
@@ -328,6 +374,7 @@
       }
       fragment.appendChild(row);
     }
+    if (selectedMenuId && !chapters.some(chapter => chapter.id === selectedMenuId)) selectedMenuId = null;
     $('bookManagerChapterList').replaceChildren(fragment);
     $('bookManagerEmptyResults').hidden = totalMatches > 0;
     $('bookManagerChapterMore').hidden = rendered >= totalMatches;
@@ -339,6 +386,50 @@
     screen.querySelectorAll('.book-manager-file-actions button').forEach(button => { button.disabled = !state.ready || state.busy || orderBusy; });
   }
 
+
+
+  function openDeleteConfirm(id) {
+    if (!state.book || !state.ready || state.busy || orderBusy || dragState) return;
+    if (!clearFilenameEdit()) return;
+    const chapter = state.chapters.find(item => item.id === id);
+    if (!chapter) return;
+    selectedMenuId = null;
+    selectedMoveId = null;
+    deleteTargetId = id;
+    $('bookManagerDeleteName').textContent = chapter.name;
+    $('bookManagerDeleteLast').hidden = state.chapters.length !== 1;
+    $('bookManagerDeleteError').textContent = '';
+    renderChapters();
+    if (!$('bookManagerDeleteDialog').open) $('bookManagerDeleteDialog').showModal();
+  }
+
+  async function confirmDeleteChapter() {
+    const id = deleteTargetId;
+    const book = state.book?.name;
+    if (!id || !book || orderBusy || state.busy || !state.ready) return;
+    if (typeof api.actions.deleteChapter !== 'function') {
+      $('bookManagerDeleteError').textContent = 'TXT 삭제 기능을 사용할 수 없습니다.';
+      return;
+    }
+    // The user confirmed in the modal. Close it before writing so Safari
+    // will not strand a modal over the app if the last book disappears.
+    $('bookManagerDeleteDialog').close();
+    deleteTargetId = null;
+    orderBusy = true;
+    orderStatus = '선택한 TXT를 앱에서 삭제하는 중…';
+    renderChapters();
+    updateControls();
+    try {
+      const result = await api.actions.deleteChapter(book, id);
+      orderStatus = result?.bookDeleted ? '' : 'TXT를 삭제했습니다. NAS 원본은 유지됩니다.';
+    } catch (error) {
+      orderStatus = error?.message || 'TXT를 삭제하지 못했습니다. 다시 확인해 주세요.';
+    } finally {
+      orderBusy = false;
+      renderChapters();
+      updateControls();
+    }
+  }
 
   async function applyFilenameRename(id) {
     if (!state.book || !state.ready || state.busy || orderBusy || editingFilenameId !== id) return;
@@ -676,6 +767,8 @@
     screen.hidden = true;
     document.body.classList.remove('cover-visible');
     selectedMoveId = null;
+    selectedMenuId = null;
+    deleteTargetId = null;
     editingFilenameId = null;
     filenameDraft = '';
     orderStatus = '';
@@ -728,8 +821,17 @@
     chapterSearch = event.target.value;
     chapterVisibleLimit = 100;
     selectedMoveId = null;
+    selectedMenuId = null;
     renderChapters();
   });
+  $('bookManagerDeleteConfirm').addEventListener('click', () => { void confirmDeleteChapter(); });
+  $('bookManagerDeleteCancel').addEventListener('click', () => {
+    if (!orderBusy) $('bookManagerDeleteDialog').close();
+  });
+  $('bookManagerDeleteDialog').addEventListener('cancel', event => {
+    if (orderBusy) event.preventDefault();
+  });
+  $('bookManagerDeleteDialog').addEventListener('close', () => { deleteTargetId = null; });
   $('coverPickerFile').addEventListener('change', event => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -737,7 +839,9 @@
   });
   screen.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !state.busy && !orderBusy) {
+      if ($('bookManagerDeleteDialog').open) return;
       event.preventDefault();
+      if (selectedMenuId) { selectedMenuId = null; renderChapters(); return; }
       invoke('back');
     }
   });
