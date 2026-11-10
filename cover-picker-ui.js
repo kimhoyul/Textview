@@ -8,6 +8,8 @@
     next: '<path d="m9 5 7 7-7 7"/>',
     check: '<path d="m5 12 4.5 4.5L19 7"/>',
     search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 10.5v6"/><circle cx="12" cy="7.2" r=".7" fill="currentColor" stroke="none"/>',
+    reset: '<path d="M20 11a8 8 0 0 0-14.4-4.8L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.4 4.8L20 16"/><path d="M16 16h4v4"/>',
     down: '<path d="m6 9 6 6 6-6"/>',
   };
   const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icons[name] || ''}</svg>`;
@@ -75,13 +77,17 @@
     <section id="coverPickerChaptersPanel" class="book-manager-chapters" role="tabpanel" aria-labelledby="bookManagerChaptersTab" hidden>
       <header class="book-manager-chapters-heading">
         <h2 id="bookManagerChaptersTitle"></h2>
+        <span class="book-manager-heading-divider" aria-hidden="true"></span>
         <span id="bookManagerChaptersCount"></span>
       </header>
       <label class="book-manager-chapter-search-label" for="bookManagerChapterSearch">목차 검색</label>
-      <input id="bookManagerChapterSearch" class="book-manager-chapter-search" type="search" placeholder="회차 번호 또는 TXT 파일명" autocomplete="off" enterkeyhint="search">
+      <div class="book-manager-chapter-search-field">
+        ${icon('search')}
+        <input id="bookManagerChapterSearch" class="book-manager-chapter-search" type="search" placeholder="회차 번호 또는 TXT 파일명" autocomplete="off" enterkeyhint="search">
+      </div>
       <div class="book-manager-order-tools">
-        <p>각 TXT의 위치 이동을 눌러 순서를 변경할 수 있습니다.</p>
-        <button id="bookManagerResetOrder" type="button" data-cover-action="reset-order" hidden>회차 번호순 복원</button>
+        <p class="book-manager-order-note">${icon('info')}<span>각 TXT의 위치 이동을 눌러 순서를 변경할 수 있습니다.</span></p>
+        <button id="bookManagerResetOrder" type="button" data-cover-action="reset-order" hidden>${icon('reset')}<span>회차 번호순 복원</span></button>
       </div>
       <p id="bookManagerOrderStatus" class="book-manager-order-status" role="status" aria-live="polite"></p>
       <ol id="bookManagerChapterList" class="book-manager-chapter-list"></ol>
