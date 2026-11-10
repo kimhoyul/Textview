@@ -97,14 +97,25 @@ html:has(body.cover-visible)::-webkit-scrollbar { display: none; }
 }
 
 .book-manager-chapter-info { display: flex; flex: 1 1 170px; min-width: 0; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
-.book-manager-chapter-rank { color: #c5acee; font-size: 12px; }
+.book-manager-chapter-rank { color: #aaa5b0; font-size: 12px; }
 .book-manager-chapter-name { color: #f4f1f8; font-size: 14px; line-height: 1.5; }
 .book-manager-chapter-filename { overflow: hidden; color: #98939f; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .cover-picker-screen .book-manager-chapter-move { flex-shrink: 0; min-height: 40px; padding: 8px 12px; border: 1px solid #5e5569; border-radius: 9px; color: #e0c8fe; font-size: 12px; }
 
 .cover-picker-screen .book-manager-chapter-rename { flex-shrink: 0; min-height: 40px; padding: 8px 10px; border: 1px solid #635772; border-radius: 9px; color: #e5d6f8; font-size: 12px; }
-.cover-picker-screen .book-manager-drag-handle { flex: 0 0 42px; width: 42px; min-height: 44px; border-radius: 10px; border: 1px solid #605572; background: #302a39; color: #d7c0f5; font-size: 28px; line-height: 1; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
-.cover-picker-screen .book-manager-drag-handle:active { cursor: grabbing; }
+.cover-picker-screen .book-manager-drag-handle {
+  display: flex; flex: 0 0 42px; width: 42px; min-height: 44px;
+  align-items: center; justify-content: center;
+  border: 0; border-radius: 8px; background: transparent;
+  color: #aaa5b0; cursor: grab; touch-action: none;
+  user-select: none; -webkit-user-select: none;
+}
+.cover-picker-screen .book-manager-drag-handle svg {
+  width: 20px; height: 20px; fill: currentColor; pointer-events: none;
+}
+.cover-picker-screen .book-manager-drag-handle:active {
+  cursor: grabbing; color: #c5acee; background: rgba(197,172,238,.10);
+}
 .book-manager-chapter-row.is-dragging { background: #30283e; box-shadow: 0 5px 18px rgba(0,0,0,.35); opacity: .95; border-radius: 10px; }
 .book-manager-chapter-row.is-drop-before { box-shadow: inset 0 3px #c5acee; }
 .book-manager-chapter-row.is-drop-after { box-shadow: inset 0 -3px #c5acee; }

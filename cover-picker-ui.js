@@ -254,7 +254,13 @@
       const filename = createElement('span', 'book-manager-chapter-filename', chapter.name);
       info.append(rank, name, filename);
 
-      const grip = createElement('button', 'book-manager-drag-handle', '⠿');
+      const grip = createElement('button', 'book-manager-drag-handle');
+      // Decorative six-dot grip. Keep the button's full touch target for pointer dragging.
+      grip.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+        '<circle cx="9" cy="5" r="1.7"/><circle cx="15" cy="5" r="1.7"/>' +
+        '<circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/>' +
+        '<circle cx="9" cy="19" r="1.7"/><circle cx="15" cy="19" r="1.7"/>' +
+        '</svg>';
       grip.type = 'button';
       grip.disabled = !state.ready || state.busy || orderBusy || !!query;
       grip.setAttribute('aria-label', title + ' 손잡이를 끌어서 순서 이동');
